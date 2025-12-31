@@ -184,3 +184,24 @@
 
 ### End Timestamp
 **End Timestamp**: 2025-03-04 17:05:00 UTC
+
+---
+
+## Session ID: 20250304-173000
+**Start Timestamp**: 2025-03-04 17:30:00 UTC
+
+### Objective(s)
+1. Ensure transcription text correctly updates single rows in Supabase without duplicates or race conditions.
+
+### Scope boundaries
+- `App.tsx`: Refactor `syncToDatabase` and `onTranscription` callback logic.
+
+### Repo State
+- `syncToDatabase` was relying on a mutable ref for the ID inside an async closure, which could cause race conditions if multiple thoughts were finalized in rapid succession.
+
+### Summary of Changes
+- **App.tsx**: Modified `syncToDatabase` to accept an explicit `utteranceId`.
+- **App.tsx**: Modified `onTranscription` callback to capture the ID locally and rotate the global ref immediately upon finalization. This ensures that the finalized text and subsequent interim results always use the correct, distinct database keys.
+
+### End Timestamp
+**End Timestamp**: 2025-03-04 17:40:00 UTC

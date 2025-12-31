@@ -219,7 +219,7 @@ const App: React.FC = () => {
       const idx = prev.findIndex(t => t.id === item.id);
       if (idx > -1) {
         const updated = [...prev];
-        // FIX: Use nullish coalescing so that false is preserved correctly
+        // Use nullish coalescing to correctly preserve boolean false
         updated[idx] = { ...updated[idx], text: item.text, isFinal: item.isFinal ?? true, speaker: speakerName };
         return updated;
       }
@@ -329,9 +329,8 @@ const App: React.FC = () => {
     return () => { supabase.removeChannel(transcriptChannel); };
   }, [isActive, role, processTranscriptItem]);
 
-  const syncToDatabase = useCallback(async (text: string, isFinal: boolean, senderOverride?: string) => {
+  const syncToDatabase = useCallback(async (text: string, isFinal: boolean, utteranceId: string, senderOverride?: string) => {
     if (!text.trim() || !currentUserId || role !== UserRole.SPEAKER) return;
-    const utteranceId = currentUtteranceIdRef.current;
     
     const performSync = async () => {
       const { error } = await saveTranscript({ 
@@ -344,8 +343,6 @@ const App: React.FC = () => {
       
       if (error) {
         setLastError(`Persistence Error: ${error.message || 'Check your internet connection.'}`);
-      } else {
-        if (isFinal) { currentUtteranceIdRef.current = crypto.randomUUID(); }
       }
     };
 
@@ -411,13 +408,14 @@ const App: React.FC = () => {
                 const uid = currentUtteranceIdRef.current;
                 const senderName = speaker || displayName;
                 setCurrentSubtitle({ text, isFinal });
-                syncToDatabase(text, isFinal, senderName);
+                syncToDatabase(text, isFinal, uid, senderName);
                 
-                // FIX: Call processTranscriptItem for interim results too so they appear in the UI list immediately
+                // Call processTranscriptItem for interim results too so they appear in the UI list immediately
                 processTranscriptItem({ id: uid, text, sender: senderName, isFinal: isFinal }, false);
                 
                 if (isFinal) {
-                  // Utterance finalized, syncToDatabase already handled the unique ID reset via side effect in its internal performSync
+                  // Utterance finalized, immediately start a new ID for the next thought
+                  currentUtteranceIdRef.current = crypto.randomUUID();
                 }
               },
               onStatusChange: setSessionStatus,
@@ -449,9 +447,11 @@ const App: React.FC = () => {
             recognition.onresult = (e: any) => {
               const text = Array.from(e.results).map((r: any) => r[0].transcript).join(' ');
               const isFinal = e.results[e.results.length - 1].isFinal;
+              const uid = currentUtteranceIdRef.current;
               setCurrentSubtitle({ text, isFinal });
-              syncToDatabase(text, isFinal, displayName);
-              processTranscriptItem({ id: currentUtteranceIdRef.current, text, sender: displayName, isFinal: isFinal }, false);
+              syncToDatabase(text, isFinal, uid, displayName);
+              processTranscriptItem({ id: uid, text, sender: displayName, isFinal: isFinal }, false);
+              if (isFinal) currentUtteranceIdRef.current = crypto.randomUUID();
             };
             recognition.onerror = (e: any) => setLastError(e.error);
             recognition.start();
@@ -473,12 +473,14 @@ const App: React.FC = () => {
               const data = JSON.parse(msg.data);
               const transcript = data.channel.alternatives[0].transcript;
               if (transcript) {
+                const uid = currentUtteranceIdRef.current;
                 setCurrentSubtitle({ text: transcript, isFinal: data.is_final });
                 if (data.is_final) {
-                  syncToDatabase(transcript, true, displayName);
-                  processTranscriptItem({ id: currentUtteranceIdRef.current, text: transcript, sender: displayName, isFinal: true }, false);
+                  syncToDatabase(transcript, true, uid, displayName);
+                  processTranscriptItem({ id: uid, text: transcript, sender: displayName, isFinal: true }, false);
+                  currentUtteranceIdRef.current = crypto.randomUUID();
                 } else {
-                  processTranscriptItem({ id: currentUtteranceIdRef.current, text: transcript, sender: displayName, isFinal: false }, false);
+                  processTranscriptItem({ id: uid, text: transcript, sender: displayName, isFinal: false }, false);
                 }
               }
             };
