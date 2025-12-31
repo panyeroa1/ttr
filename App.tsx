@@ -5,7 +5,7 @@ import { supabase, saveTranscript, saveTranslation, fetchTranscripts, getUserPro
 import SessionControls from './components/SessionControls';
 import LiveCaptions from './components/LiveCaptions';
 import SubtitlesOverlay from './components/SubtitlesOverlay';
-import { Sparkles, Database, AlertCircle, X, Wifi, CloudLightning, Mic2, VolumeX, Key, User as UserIcon, Settings, Server, Globe, Cpu, Subtitles as SubtitlesIcon, Info } from 'lucide-react';
+import { Sparkles, Database, AlertCircle, X, Wifi, CloudLightning, Mic2, VolumeX, Settings, Server, Globe, Cpu, Subtitles as SubtitlesIcon, Info, LayoutDashboard, SlidersHorizontal, MessageSquare, Volume2 } from 'lucide-react';
 
 const SYNC_DEBOUNCE_MS = 250;
 const DEFAULT_ROOM = 'default-room';
@@ -16,6 +16,7 @@ const MAX_UNPUNCTUATED_LENGTH = 140;
 const aiStudio = window.aistudio;
 
 const App: React.FC = () => {
+  const [currentTab, setCurrentTab] = useState<'live' | 'settings'>('live');
   const [role, setRole] = useState<UserRole>(UserRole.IDLE);
   const [isActive, setIsActive] = useState(false);
   const [audioSource, setAudioSource] = useState<AudioSource>(AudioSource.MIC);
@@ -31,8 +32,6 @@ const App: React.FC = () => {
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>('disconnected');
   const [lastError, setLastError] = useState<string | null>(null);
   const [isTtsPlaying, setIsTtsPlaying] = useState(false);
-  const [needsApiKey, setNeedsApiKey] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [showSubtitles, setShowSubtitles] = useState(true);
   const [currentSubtitle, setCurrentSubtitle] = useState<{text: string, isFinal: boolean}>({text: '', isFinal: false});
   const [isRateLimited, setIsRateLimited] = useState(false);
@@ -99,16 +98,6 @@ const App: React.FC = () => {
     };
     initAuth();
   }, []);
-
-  useEffect(() => {
-    const checkKey = async () => {
-      if (aiStudio && typeof aiStudio.hasSelectedApiKey === 'function') {
-        const hasKey = await aiStudio.hasSelectedApiKey();
-        setNeedsApiKey(!hasKey && sttProvider === STTEngine.GEMINI);
-      }
-    };
-    checkKey();
-  }, [sttProvider]);
 
   useEffect(() => {
     audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
@@ -202,12 +191,10 @@ const App: React.FC = () => {
       setCurrentSubtitle({ text: newContent.trim(), isFinal: item.isFinal });
     }
 
-    // "dont make any translation in the speak tab"
-    // If the current user is a speaker, we only care about showing the transcription above.
-    // Translation and TTS are only for listeners.
+    // "transcribe in segment realtime and save thats the only task needed in the Speak tab"
+    // Translation and TTS are strictly for listeners.
     if (role !== UserRole.LISTENER) return;
     
-    // Stop processing further logic if hard quota is hit
     if (isRateLimited || isDailyQuotaReached()) return;
 
     const { sentences, lastIndex } = segmentIntoSentences(newContent, item.isFinal);
@@ -437,83 +424,13 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-[100dvh] flex flex-col bg-slate-950 text-slate-100 overflow-x-hidden relative font-inter">
-      {isActive && showSubtitles && (currentSubtitle.text || role === UserRole.LISTENER) && (
+      {isActive && showSubtitles && currentTab === 'live' && (currentSubtitle.text || role === UserRole.LISTENER) && (
         <SubtitlesOverlay 
           text={role === UserRole.SPEAKER ? currentSubtitle.text : (translations.length > 0 ? translations[translations.length - 1].text : '')} 
           isFinal={role === UserRole.SPEAKER ? currentSubtitle.isFinal : true}
           speakerName={role === UserRole.SPEAKER ? displayName : activeSpeakerName || 'Speaker'}
           type={role === UserRole.SPEAKER ? 'source' : 'target'}
         />
-      )}
-
-      {isSettingsOpen && (
-        <div className="fixed inset-0 z-[200] bg-slate-950/80 backdrop-blur-xl flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-white/10 rounded-[2.5rem] w-full max-w-xl p-8 md:p-12 shadow-2xl animate-in zoom-in duration-300">
-            <div className="flex justify-between items-center mb-10">
-              <h2 className="text-2xl font-black uppercase tracking-widest flex items-center gap-4">
-                <Settings className="w-6 h-6 text-indigo-500" />
-                Advanced Settings
-              </h2>
-              <button onClick={() => setIsSettingsOpen(false)} className="p-2 hover:bg-white/5 rounded-full"><X className="w-6 h-6" /></button>
-            </div>
-            
-            <div className="space-y-8">
-              <section>
-                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4 block">STT Provider</label>
-                <div className="grid grid-cols-3 gap-3">
-                  <SettingBtn active={sttProvider === STTEngine.GEMINI} onClick={() => setSttProvider(STTEngine.GEMINI)} icon={Sparkles} label="Gemini" />
-                  <SettingBtn active={sttProvider === STTEngine.DEEPGRAM} onClick={() => setSttProvider(STTEngine.DEEPGRAM)} icon={Server} label="Deepgram" />
-                  <SettingBtn active={sttProvider === STTEngine.WEBSPEECH} onClick={() => setSttProvider(STTEngine.WEBSPEECH)} icon={Globe} label="WebSpeech" />
-                </div>
-                {sttProvider === STTEngine.DEEPGRAM && (
-                  <input 
-                    type="password" placeholder="Deepgram Key" value={deepgramKey} 
-                    onChange={(e) => setDeepgramKey(e.target.value)}
-                    className="w-full mt-4 bg-slate-800 border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 outline-none transition-all"
-                  />
-                )}
-              </section>
-
-              <section>
-                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4 block">Translation Engine</label>
-                <div className="grid grid-cols-2 gap-3">
-                  <SettingBtn active={translationProvider === TranslationEngine.GEMINI} onClick={() => setTranslationProvider(TranslationEngine.GEMINI)} icon={Sparkles} label="Gemini Flash" />
-                  <SettingBtn active={translationProvider === TranslationEngine.OLLAMA_GEMMA} onClick={() => setTranslationProvider(TranslationEngine.OLLAMA_GEMMA)} icon={Cpu} label="Gemma (Ollama)" />
-                </div>
-                {translationProvider === TranslationEngine.OLLAMA_GEMMA && (
-                  <input 
-                    type="text" placeholder="Ollama API Endpoint" value={ollamaUrl} 
-                    onChange={(e) => setOllamaUrl(e.target.value)}
-                    className="w-full mt-4 bg-slate-800 border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 outline-none transition-all"
-                  />
-                )}
-              </section>
-
-              <section>
-                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4 block">Display Options</label>
-                <button 
-                  onClick={() => setShowSubtitles(!showSubtitles)}
-                  className={`flex items-center justify-between w-full p-4 rounded-2xl border transition-all ${showSubtitles ? 'bg-indigo-600/10 border-indigo-500/50 text-indigo-400' : 'bg-slate-800/40 border-white/5 text-slate-500'}`}
-                >
-                  <div className="flex items-center gap-3">
-                    <SubtitlesIcon className="w-5 h-5" />
-                    <span className="text-xs font-black uppercase tracking-widest">Real-time Subtitles</span>
-                  </div>
-                  <div className={`w-10 h-5 rounded-full relative transition-colors ${showSubtitles ? 'bg-indigo-600' : 'bg-slate-700'}`}>
-                    <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${showSubtitles ? 'left-6' : 'left-1'}`} />
-                  </div>
-                </button>
-              </section>
-            </div>
-            
-            <button 
-              onClick={() => setIsSettingsOpen(false)}
-              className="w-full mt-12 bg-indigo-600 hover:bg-indigo-500 text-white font-black py-4 rounded-2xl uppercase tracking-widest text-sm transition-all"
-            >
-              Apply Configuration
-            </button>
-          </div>
-        </div>
       )}
 
       {(isDailyQuotaReached() || isRateLimited) && (
@@ -553,14 +470,12 @@ const App: React.FC = () => {
             </div>
           </div>
 
+          <div className="flex items-center gap-1 bg-slate-900/60 p-1 rounded-2xl border border-white/5 shadow-inner">
+            <TabBtn active={currentTab === 'live'} onClick={() => setCurrentTab('live')} icon={LayoutDashboard} label="Live" />
+            <TabBtn active={currentTab === 'settings'} onClick={() => setCurrentTab('settings')} icon={SlidersHorizontal} label="Settings" />
+          </div>
+
           <div className="flex flex-wrap items-center justify-center gap-2">
-            <button 
-              onClick={() => setIsSettingsOpen(true)}
-              className="p-2 hover:bg-white/5 rounded-xl text-slate-400 hover:text-indigo-400 transition-all flex items-center gap-2 border border-transparent hover:border-white/10"
-            >
-              <Settings className="w-5 h-5" />
-              <span className="text-[10px] font-black uppercase tracking-widest hidden sm:inline">Settings</span>
-            </button>
             <StatusBadge status={sessionStatus} icon={role === UserRole.SPEAKER ? Wifi : CloudLightning} label={sttProvider + " " + sessionStatus.toUpperCase()} active={sessionStatus === 'connected'} />
             <StatusBadge status={dbStatus} icon={Database} label="DATABASE" active={dbStatus === 'connected'} error={dbStatus === 'error'} />
           </div>
@@ -568,40 +483,161 @@ const App: React.FC = () => {
       </header>
 
       <main className="flex-1 w-full max-w-[1920px] mx-auto px-2 md:px-8 py-4 md:py-8 overflow-hidden flex flex-col items-center">
-        <div className={`w-full h-full grid gap-3 md:gap-4 min-h-[calc(100vh-320px)] md:min-h-[calc(100vh-280px)] ${
-          role === UserRole.SPEAKER ? 'grid-cols-1 max-w-5xl place-items-center' : 'grid-cols-1 md:grid-cols-2'
-        }`}>
-          <div className="flex w-full h-full animate-in fade-in duration-700">
-            <LiveCaptions title={role === UserRole.SPEAKER ? "My Transcription (Broadcasting)" : "Original Transcription"} transcripts={transcripts} translations={[]} type="source" />
-          </div>
-          {role === UserRole.LISTENER && (
-            <div className="flex w-full h-full animate-in slide-in-from-right duration-700">
-              <LiveCaptions title="My Translation (Read Aloud)" transcripts={[]} translations={translations} type="target" />
+        {currentTab === 'live' ? (
+          <div className={`w-full h-full grid gap-3 md:gap-4 min-h-[calc(100vh-320px)] md:min-h-[calc(100vh-280px)] ${
+            role === UserRole.SPEAKER ? 'grid-cols-1 max-w-5xl place-items-center' : 'grid-cols-1 md:grid-cols-2'
+          }`}>
+            <div className="flex w-full h-full animate-in fade-in duration-700">
+              <LiveCaptions title={role === UserRole.SPEAKER ? "My Transcription (Broadcasting)" : "Original Transcription"} transcripts={transcripts} translations={[]} type="source" />
             </div>
-          )}
-        </div>
+            {role === UserRole.LISTENER && (
+              <div className="flex w-full h-full animate-in slide-in-from-right duration-700">
+                <LiveCaptions title="My Translation (Read Aloud)" transcripts={[]} translations={translations} type="target" />
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="w-full max-w-4xl h-full animate-in zoom-in-95 duration-500 bg-slate-900/40 backdrop-blur-xl rounded-[2.5rem] border border-white/10 p-6 md:p-12 overflow-y-auto scrollbar-hide">
+            <div className="flex items-center gap-4 mb-10">
+              <div className="p-3 bg-indigo-600 rounded-2xl">
+                <SlidersHorizontal className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <h2 className="text-2xl font-black uppercase tracking-widest">Configuration</h2>
+                <p className="text-xs text-slate-500 font-bold uppercase tracking-widest mt-1">Fine-tune your realtime pipeline</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-12">
+              <SettingsSection icon={Mic2} title="Speech-to-Text (STT)" description="Choose your transcription engine">
+                <div className="grid grid-cols-1 gap-3">
+                  <SettingBtn active={sttProvider === STTEngine.GEMINI} onClick={() => setSttProvider(STTEngine.GEMINI)} icon={Sparkles} label="Gemini Live" description="Best for natural context" />
+                  <SettingBtn active={sttProvider === STTEngine.DEEPGRAM} onClick={() => setSttProvider(STTEngine.DEEPGRAM)} icon={Server} label="Deepgram" description="Ultra low latency" />
+                  <SettingBtn active={sttProvider === STTEngine.WEBSPEECH} onClick={() => setSttProvider(STTEngine.WEBSPEECH)} icon={Globe} label="WebSpeech" description="Privacy-first, browser native" />
+                </div>
+                {sttProvider === STTEngine.DEEPGRAM && (
+                  <div className="mt-4 animate-in slide-in-from-top-2">
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Deepgram API Key</label>
+                    <input 
+                      type="password" placeholder="dg_xxxxxxxxxxxx" value={deepgramKey} 
+                      onChange={(e) => setDeepgramKey(e.target.value)}
+                      className="w-full bg-slate-800 border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 outline-none transition-all"
+                    />
+                  </div>
+                )}
+              </SettingsSection>
+
+              <SettingsSection icon={MessageSquare} title="Translation" description="AI powered chat completions">
+                <div className="grid grid-cols-1 gap-3">
+                  <SettingBtn active={translationProvider === TranslationEngine.GEMINI} onClick={() => setTranslationProvider(TranslationEngine.GEMINI)} icon={Sparkles} label="Gemini Flash" description="Fastest cloud translation" />
+                  <SettingBtn active={translationProvider === TranslationEngine.OLLAMA_GEMMA} onClick={() => setTranslationProvider(TranslationEngine.OLLAMA_GEMMA)} icon={Cpu} label="Gemma (Ollama)" description="Self-hosted local model" />
+                </div>
+                {translationProvider === TranslationEngine.OLLAMA_GEMMA && (
+                  <div className="mt-4 animate-in slide-in-from-top-2">
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Ollama Endpoint</label>
+                    <input 
+                      type="text" placeholder="http://localhost:11434" value={ollamaUrl} 
+                      onChange={(e) => setOllamaUrl(e.target.value)}
+                      className="w-full bg-slate-800 border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 outline-none transition-all"
+                    />
+                  </div>
+                )}
+              </SettingsSection>
+
+              <SettingsSection icon={Volume2} title="Text-to-Speech (TTS)" description="Select your AI voice">
+                <div className="grid grid-cols-1 gap-2">
+                  {[
+                    { id: VoiceName.KORE, name: 'Kore', desc: 'Soft & Friendly' },
+                    { id: VoiceName.PUCK, name: 'Puck', desc: 'Deep & Resonant' },
+                    { id: VoiceName.ZEPHYR, name: 'Zephyr', desc: 'Clear & Crisp' },
+                    { id: VoiceName.FENRIR, name: 'Fenrir', desc: 'Bold & Direct' },
+                    { id: VoiceName.CHARON, name: 'Charon', desc: 'Gravelly & Strong' }
+                  ].map(v => (
+                    <SettingBtn key={v.id} active={voiceName === v.id} onClick={() => setVoiceName(v.id as VoiceName)} icon={Volume2} label={v.name} description={v.desc} />
+                  ))}
+                </div>
+              </SettingsSection>
+
+              <SettingsSection icon={SubtitlesIcon} title="Interface" description="Realtime visual feedback">
+                <button 
+                  onClick={() => setShowSubtitles(!showSubtitles)}
+                  className={`flex items-center justify-between w-full p-4 rounded-2xl border transition-all ${showSubtitles ? 'bg-indigo-600/10 border-indigo-500/50 text-indigo-400' : 'bg-slate-800/40 border-white/5 text-slate-500'}`}
+                >
+                  <div className="flex items-center gap-3">
+                    <SubtitlesIcon className="w-5 h-5" />
+                    <div>
+                      <p className="text-xs font-black uppercase tracking-widest text-left">Overlay Subtitles</p>
+                      <p className="text-[10px] opacity-60">Display floating captions during session</p>
+                    </div>
+                  </div>
+                  <div className={`w-10 h-5 rounded-full relative transition-colors ${showSubtitles ? 'bg-indigo-600' : 'bg-slate-700'}`}>
+                    <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${showSubtitles ? 'left-6' : 'left-1'}`} />
+                  </div>
+                </button>
+              </SettingsSection>
+            </div>
+            
+            <button 
+              onClick={() => setCurrentTab('live')}
+              className="w-full mt-12 bg-indigo-600 hover:bg-indigo-500 text-white font-black py-4 rounded-2xl uppercase tracking-widest text-sm transition-all shadow-xl shadow-indigo-500/20"
+            >
+              Back to Live Stream
+            </button>
+          </div>
+        )}
       </main>
 
       <SessionControls 
         role={role} isActive={isActive} onToggleRole={setRole} onToggleActive={toggleActive}
         targetLang={targetLang} onTargetLangChange={setTargetLang} 
         audioSource={audioSource} onAudioSourceChange={setAudioSource}
-        voiceName={voiceName} onVoiceNameChange={setVoiceName}
         audioLevel={audioLevel}
       />
     </div>
   );
 };
 
-const SettingBtn = ({ active, onClick, icon: Icon, label }: any) => (
+const TabBtn = ({ active, onClick, icon: Icon, label }: any) => (
   <button
     onClick={onClick}
-    className={`flex flex-col items-center gap-2 p-4 rounded-2xl border transition-all ${
-      active ? 'bg-indigo-600/20 border-indigo-500 text-indigo-400' : 'bg-slate-800/40 border-white/5 text-slate-500 hover:bg-slate-800'
+    className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${
+      active ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'
     }`}
   >
-    <Icon className="w-5 h-5" />
-    <span className="text-[10px] font-black uppercase tracking-widest">{label}</span>
+    <Icon className="w-4 h-4" />
+    <span>{label}</span>
+  </button>
+);
+
+const SettingsSection = ({ icon: Icon, title, description, children }: any) => (
+  <section className="space-y-4">
+    <div className="flex items-center gap-3 border-b border-white/5 pb-4">
+      <div className="p-2 bg-slate-800/60 rounded-xl">
+        <Icon className="w-4 h-4 text-indigo-400" />
+      </div>
+      <div>
+        <h3 className="text-sm font-black uppercase tracking-widest text-slate-200">{title}</h3>
+        <p className="text-[10px] text-slate-500 font-bold uppercase tracking-tight">{description}</p>
+      </div>
+    </div>
+    <div className="space-y-3">{children}</div>
+  </section>
+);
+
+const SettingBtn = ({ active, onClick, icon: Icon, label, description }: any) => (
+  <button
+    onClick={onClick}
+    className={`flex items-center gap-4 p-4 rounded-2xl border text-left transition-all ${
+      active ? 'bg-indigo-600/20 border-indigo-500 text-indigo-400 shadow-inner' : 'bg-slate-800/40 border-white/5 text-slate-500 hover:bg-slate-800/60 hover:border-white/10'
+    }`}
+  >
+    <div className={`p-2 rounded-xl ${active ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-500'}`}>
+      <Icon className="w-4 h-4" />
+    </div>
+    <div className="flex-1">
+      <p className={`text-xs font-black uppercase tracking-widest ${active ? 'text-indigo-100' : 'text-slate-300'}`}>{label}</p>
+      {description && <p className="text-[10px] opacity-60 font-bold uppercase tracking-tight line-clamp-1">{description}</p>}
+    </div>
   </button>
 );
 

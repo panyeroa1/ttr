@@ -1,6 +1,6 @@
 import React from 'react';
-import { Mic, Headphones, Languages, Square, Play, MonitorSpeaker, Disc, ChevronDown, Volume2, UserCircle2 } from 'lucide-react';
-import { UserRole, AudioSource, VoiceName } from '../types';
+import { Mic, Headphones, Languages, Square, Play, MonitorSpeaker, Disc, ChevronDown } from 'lucide-react';
+import { UserRole, AudioSource } from '../types';
 import { AudioLevelMeter } from '../App';
 
 interface SessionControlsProps {
@@ -12,8 +12,6 @@ interface SessionControlsProps {
   onTargetLangChange: (lang: string) => void;
   audioSource: AudioSource;
   onAudioSourceChange: (source: AudioSource) => void;
-  voiceName: VoiceName;
-  onVoiceNameChange: (voice: VoiceName) => void;
   audioLevel?: number;
 }
 
@@ -139,7 +137,6 @@ const LANGUAGES = [
   { code: 'es-VE', name: 'Spanish (Venezuela)' },
   { code: 'sw-KE', name: 'Swahili (Kenya)' },
   { code: 'sw-TZ', name: 'Swahili (Tanzania)' },
-  { code: 'sw-TZ', name: 'Swahili (Tanzania)' },
   { code: 'sv-SE', name: 'Swedish (Sweden)' },
   { code: 'ta-IN', name: 'Tamil (India)' },
   { code: 'ta-LK', name: 'Tamil (Sri Lanka)' },
@@ -154,17 +151,9 @@ const LANGUAGES = [
   { code: 'zu-ZA', name: 'Zulu (South Africa)' }
 ].sort((a, b) => a.name.localeCompare(b.name));
 
-const VOICES = [
-  { id: VoiceName.PUCK, name: 'Puck', desc: 'Deep & Resonant', gender: 'M' },
-  { id: VoiceName.CHARON, name: 'Charon', desc: 'Gravelly & Strong', gender: 'M' },
-  { id: VoiceName.KORE, name: 'Kore', desc: 'Soft & Friendly', gender: 'F' },
-  { id: VoiceName.FENRIR, name: 'Fenrir', desc: 'Bold & Direct', gender: 'M' },
-  { id: VoiceName.ZEPHYR, name: 'Zephyr', desc: 'Clear & Crisp', gender: 'F' }
-];
-
 const SessionControls: React.FC<SessionControlsProps> = ({ 
   role, isActive, onToggleRole, onToggleActive, targetLang, onTargetLangChange, 
-  audioSource, onAudioSourceChange, voiceName, onVoiceNameChange, audioLevel = 0
+  audioSource, onAudioSourceChange, audioLevel = 0
 }) => {
   const [isExpanded, setIsExpanded] = React.useState(false);
   const isSpeaker = role === UserRole.SPEAKER;
@@ -174,7 +163,6 @@ const SessionControls: React.FC<SessionControlsProps> = ({
     <div className="fixed bottom-4 left-0 w-full px-4 z-50 transition-all duration-500">
       <div className="max-w-[1920px] mx-auto bg-slate-900/90 backdrop-blur-3xl border border-white/10 rounded-[2rem] md:rounded-[2.5rem] shadow-2xl p-3 md:p-5 flex flex-col items-center gap-3 md:gap-5 overflow-hidden">
         
-        {/* Toggle Expand Handle (Mobile Only) */}
         <button 
           onClick={() => setIsExpanded(!isExpanded)} 
           className="md:hidden flex-center w-full h-8 text-slate-500 hover:text-slate-300 transition-colors"
@@ -184,17 +172,14 @@ const SessionControls: React.FC<SessionControlsProps> = ({
 
         <div className={`${isExpanded ? 'flex' : 'hidden md:flex'} flex-col md:flex-row items-center gap-4 md:gap-6 w-full justify-between`}>
           
-          {/* Role Selection Group */}
           <div className="grid grid-cols-2 bg-slate-800/40 rounded-2xl p-1.5 border border-white/5 w-full md:w-auto">
             <ModeBtn active={isSpeaker} disabled={isActive} onClick={() => onToggleRole(UserRole.SPEAKER)} icon={Mic} label="Speak" />
             <ModeBtn active={isListener} disabled={isActive} onClick={() => onToggleRole(UserRole.LISTENER)} icon={Headphones} label="Listen" />
           </div>
 
-          {/* Dynamic Settings Center Area */}
           <div className="flex-1 w-full md:w-auto grid place-items-center">
             <div className="flex flex-col sm:flex-row items-center gap-4 md:gap-8 w-full md:w-auto justify-center">
               
-              {/* Speaker-specific Settings */}
               {isSpeaker && (
                 <div className="flex flex-col items-center animate-in fade-in slide-in-from-bottom-2 duration-300 w-full sm:w-auto">
                   <label className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] mb-2 text-center">Capture Source</label>
@@ -206,50 +191,25 @@ const SessionControls: React.FC<SessionControlsProps> = ({
                 </div>
               )}
 
-              {/* Listener-specific Settings */}
               {isListener && (
-                <div className="flex flex-col xl:flex-row items-center gap-4 md:gap-8 w-full md:w-auto">
-                  <div className="flex flex-col items-center animate-in fade-in slide-in-from-bottom-2 duration-300 w-full sm:w-auto">
-                    <label className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] mb-2 text-center">Translation Output</label>
-                    <div className="relative group w-full min-w-[200px]">
-                      <Languages className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-indigo-400 group-hover:scale-110 transition-transform" />
-                      <select 
-                        value={targetLang}
-                        onChange={(e) => onTargetLangChange(e.target.value)}
-                        className="bg-slate-800/60 text-xs font-bold border border-white/5 rounded-2xl pl-11 pr-10 py-3 outline-none hover:bg-slate-700 text-slate-100 transition-all appearance-none w-full"
-                      >
-                        {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.name}</option>)}
-                      </select>
-                      <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500 pointer-events-none" />
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col items-center animate-in fade-in slide-in-from-bottom-2 duration-500 w-full sm:w-auto">
-                    <label className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] mb-2 text-center">Aural Presence</label>
-                    <div className="flex bg-slate-800/40 rounded-2xl p-1 border border-white/5 overflow-x-auto scrollbar-hide max-w-[320px] sm:max-w-none">
-                      {VOICES.map((v) => (
-                        <button 
-                          key={v.id}
-                          onClick={() => onVoiceNameChange(v.id)}
-                          className={`flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-all relative group ${voiceName === v.id ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}`}
-                        >
-                          <div className="flex items-center gap-1.5">
-                            <Volume2 className={`w-3.5 h-3.5 ${voiceName === v.id ? 'text-white' : 'text-slate-500'}`} />
-                            <span className="text-[10px] font-black uppercase tracking-widest">{v.name}</span>
-                          </div>
-                          <span className={`text-[7px] font-bold uppercase tracking-tight opacity-60 whitespace-nowrap ${voiceName === v.id ? 'text-indigo-100' : 'text-slate-600'}`}>
-                            {v.desc}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
+                <div className="flex flex-col items-center animate-in fade-in slide-in-from-bottom-2 duration-300 w-full sm:w-auto">
+                  <label className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] mb-2 text-center">Target Language</label>
+                  <div className="relative group w-full min-w-[240px]">
+                    <Languages className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-indigo-400 group-hover:scale-110 transition-transform" />
+                    <select 
+                      value={targetLang}
+                      onChange={(e) => onTargetLangChange(e.target.value)}
+                      className="bg-slate-800/60 text-xs font-bold border border-white/5 rounded-2xl pl-11 pr-10 py-3 outline-none hover:bg-slate-700 text-slate-100 transition-all appearance-none w-full"
+                    >
+                      {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.name}</option>)}
+                    </select>
+                    <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500 pointer-events-none" />
                   </div>
                 </div>
               )}
             </div>
           </div>
 
-          {/* Action Area */}
           <div className="flex items-center gap-4 w-full md:w-auto justify-center">
             {isActive && isSpeaker && (
               <div className="hidden lg:flex flex-col items-center gap-1.5 animate-in fade-in slide-in-from-right duration-500 px-6 border-l border-white/5">

@@ -6,11 +6,11 @@ TTR is designed to facilitate cross-language communication in real-time. It leve
 ## Features Implemented
 - [x] **Real-time STT**: Microphone capture streamed to Gemini Live with transcription results.
 - [x] **Database Persistence**: Transcripts and translations are stored in Supabase for auditability.
-- [x] **Automatic Translation**: Finalized transcripts trigger a Gemini-powered translation worker.
-- [x] **Real-time TTS**: Translated text is automatically converted to audio using Gemini TTS.
-- [x] **Dual Modes**: Dedicated "Speak" and "Listen" configurations to prevent audio feedback loops.
-- [x] **Live Captions**: Real-time display of both source and target language text.
-- [x] **Sentence Segmentation**: Intelligent content chunking to ensure translations are performed on complete thoughts.
+- [x] **Automatic Translation**: Finalized transcripts trigger a Gemini-powered translation worker (for listeners only).
+- [x] **Real-time TTS**: Translated text is automatically converted to audio using Gemini TTS (for listeners only).
+- [x] **Dual Modes**: Dedicated "Speak" and "Listen" configurations. Speak mode is optimized for minimal overhead (transcribe + save only).
+- [x] **Tabbed Navigation**: Dedicated 'Live' and 'Settings' tabs for clear separation of concerns.
+- [x] **Comprehensive Settings**: Full control over STT engines, Translation providers (Gemini vs Local Ollama), and TTS voices.
 - [x] **Rate-Limit Safeguards**: Enhanced `RequestQueue` with `retryDelay` parsing and UI-level quota warnings.
 
 ## Known Constraints
