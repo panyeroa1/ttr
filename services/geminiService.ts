@@ -1,5 +1,5 @@
-
 import { GoogleGenAI, Modality, LiveServerMessage } from "@google/genai";
+import { VoiceName } from "../types";
 
 export function encode(bytes: Uint8Array) {
   let binary = '';
@@ -110,10 +110,15 @@ export class LiveSessionManager {
               const text = message.serverContent.inputTranscription.text;
               this.currentTranscription += text;
               
-              // Handle optional speaker labels if the model adds them like "[Speaker 1]: text"
-              const speakerMatch = this.currentTranscription.match(/^\[(Speaker \d+)\]:\s*(.*)/i);
-              if (speakerMatch) {
-                this.callbacks.onTranscription(speakerMatch[2], false, speakerMatch[1]);
+              const tagRegex = /\[(Speaker \d+)\]:\s*(.*)/gi;
+              let lastMatch;
+              let match;
+              while ((match = tagRegex.exec(this.currentTranscription)) !== null) {
+                lastMatch = match;
+              }
+
+              if (lastMatch) {
+                this.callbacks.onTranscription(lastMatch[2], false, lastMatch[1]);
               } else {
                 this.callbacks.onTranscription(this.currentTranscription, false, this.userName);
               }
@@ -121,9 +126,15 @@ export class LiveSessionManager {
             
             if (message.serverContent?.turnComplete) {
               if (this.currentTranscription.trim()) {
-                const speakerMatch = this.currentTranscription.match(/^\[(Speaker \d+)\]:\s*(.*)/i);
-                if (speakerMatch) {
-                  this.callbacks.onTranscription(speakerMatch[2], true, speakerMatch[1]);
+                const tagRegex = /\[(Speaker \d+)\]:\s*(.*)/gi;
+                let lastMatch;
+                let match;
+                while ((match = tagRegex.exec(this.currentTranscription)) !== null) {
+                  lastMatch = match;
+                }
+
+                if (lastMatch) {
+                  this.callbacks.onTranscription(lastMatch[2], true, lastMatch[1]);
                 } else {
                   this.callbacks.onTranscription(this.currentTranscription, true, this.userName);
                 }
@@ -144,22 +155,20 @@ export class LiveSessionManager {
         config: {
           responseModalities: [Modality.AUDIO],
           inputAudioTranscription: {},
-          systemInstruction: `You are a specialized transcription agent for a meeting tool.
+          systemInstruction: `You are a specialized transcription agent for a real-time meeting tool.
           
-          PRIMARY SPEAKER: ${this.userName}
+          PRIMARY USER PROFILE:
+          Name: ${this.userName}
           
-          TASK:
-          Transcribe the incoming audio stream with high fidelity.
+          DIARIZATION MANDATE:
+          - Every time a new voice speaks, prefix with "[Speaker X]: ".
           
-          DIARIZATION RULES:
-          1. If you hear multiple distinct voices, label them as [Speaker 1], [Speaker 2], etc.
-          2. If the voice matches the profile of the primary speaker (${this.userName}), you may label it as such or leave it for the UI to handle.
-          3. Format: "[Speaker Name]: Transcription text".
-          
-          GENERAL RULES:
-          - Verbatim output only.
-          - Professional punctuation.
-          - High sensitivity to turns and pauses.`,
+          TRANSCRIPTION STYLE:
+          - Verbatim.
+          - MANDATORY PUNCTUATION: You MUST provide terminal punctuation (., ?, !, or Chinese 。) immediately after every sentence. 
+          - Do not wait for long pauses. 
+          - Precise real-time translation depends on these markers. If a thought is finished, punctuate it.
+          - Professional formatting.`,
         }
       });
     } catch (err: any) {
@@ -252,22 +261,23 @@ export class GeminiService {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: `Translate to ${targetLang}: "${text}". Only the translation.`,
+      contents: `Translate the following text to ${targetLang}. Preserve the original tone and context. Only return the translated text without extra formatting or comments.
+      
+Text: "${text}"`,
       config: { temperature: 0.1 }
     });
     return response.text?.trim() || "";
   }
 
-  async generateSpeech(text: string, voiceName: string = 'Aoede') {
+  async generateSpeech(text: string, voiceName: VoiceName = VoiceName.KORE) {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const prebuiltVoice = voiceName === 'Orus' ? 'Puck' : 'Kore';
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-preview-tts",
       contents: [{ parts: [{ text: text }] }],
       config: {
         responseModalities: [Modality.AUDIO],
         speechConfig: {
-          voiceConfig: { prebuiltVoiceConfig: { voiceName: prebuiltVoice } },
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceName } },
         },
       },
     });

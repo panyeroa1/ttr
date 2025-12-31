@@ -1,4 +1,3 @@
-
 # APP OVERVIEW: TTR - Transcription Translation Realtime
 
 ## Project Purpose
@@ -11,6 +10,7 @@ TTR is designed to facilitate cross-language communication in real-time. It leve
 - [x] **Real-time TTS**: Translated text is automatically converted to audio using Gemini TTS.
 - [x] **Dual Modes**: Dedicated "Speak" and "Listen" configurations to prevent audio feedback loops.
 - [x] **Live Captions**: Real-time display of both source and target language text.
+- [x] **Sentence Segmentation**: Intelligent content chunking to ensure translations are performed on complete thoughts rather than word fragments.
 
 ## Not Yet Implemented
 - [ ] Multi-speaker identification (currently optimized for a single active speaker per room).
@@ -19,5 +19,5 @@ TTR is designed to facilitate cross-language communication in real-time. It leve
 
 ## To-Do List
 1. Enhance VAD (Voice Activity Detection) logic for better segmentation.
-2. Add language selection dropdown for target listeners.
-3. Implement robust reconnection logic for WebSocket drops.
+2. Implement robust reconnection logic for WebSocket drops.
+3. Add multi-channel speaker diarization visuals.

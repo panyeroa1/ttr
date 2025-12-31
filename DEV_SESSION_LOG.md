@@ -1,71 +1,33 @@
 # DEV SESSION LOG
 
-## Session ID: 20240521-180000
-**Summary**: Implemented full-width UI, background resilience, and role feature strictness.
+## Session ID: 20240522-110000
+**Summary**: Multi-provider STT/LLM configuration with Settings modal.
 
 ---
 
-## Session ID: 20240521-190000
-**Summary**: Ensured Listeners fetch historical transcriptions from Supabase upon joining. Hydrated UI with context.
-
----
-
-## Session ID: 20240521-200000
-**Summary**: Expanded the language support list to include comprehensive global dialects and regional variations.
-
----
-
-## Session ID: 20240521-210000
-**Summary**: Implemented client-side echo cancellation and microphone gating.
-
----
-
-## Session ID: 20240521-220000
-**Summary**: Fixed network error and improved API key handling in LiveSessionManager.
-
----
-
-## Session ID: 20240521-230000
-**Summary**: Added Shared Tab and System Audio capture support.
-
----
-
-## Session ID: 20240521-233000
-**Summary**: Implemented real-time audio level visualizer.
-
----
-
-## Session ID: 20240522-000000
-**Start Timestamp**: 2024-05-22 00:00:00 UTC
+## Session ID: 20240522-120000
+**Start Timestamp**: 2024-05-22 12:00:00 UTC
 
 ### Objective(s)
-1. Identify and display the active speaker's name in real-time.
-2. Integrate with Supabase profiles for authenticated identity.
-3. Configure Gemini Live for multi-speaker diarization.
+1. Restore `getDisplayMedia` logic for capturing tab and system audio.
+2. Ensure audio capture source is correctly switched based on user selection in `SessionControls`.
+3. Improve error handling for audio track availability.
 
 ### Repo State
-- Transcriptions were hardcoded to "ME (SPEAKER)" for the host.
-- No profile integration in the real-time flow.
+- `App.tsx` had lost the conditional logic to use `getDisplayMedia` during the provider refactor, forcing all capture to use the microphone.
 
 ### Files Inspected
-- `lib/supabase.ts`
-- `services/geminiService.ts`
 - `App.tsx`
+- `metadata.json`
 
 ### Assumptions / Risks
-- Diarization performance depends on audio quality and model latency.
-- Gemini Live instruction-following for prefixes `[Speaker X]:` might be inconsistent under heavy load.
+- `getDisplayMedia` requires user interaction and explicit audio sharing checkbox in the browser dialog.
+- Some browsers may have varying support for system audio capture on certain OSs.
 
 ### Summary of Changes
-- **Supabase Integration**: Added `getUserProfile` to fetch the display name.
-- **Gemini Live Service**: 
-    - Added `userName` to `LiveSessionManager`.
-    - Updated `systemInstruction` to include primary speaker identity and diarization directives.
-    - Implemented regex parsing for `[Speaker N]:` prefixes in the transcription stream.
-- **App Component**: 
-    - Fetches profile on init.
-    - Displays current user name in header.
-    - Correctly maps speaker identities in the transcription state and Supabase sync.
+- **App.tsx**: Updated `toggleActive` to branch between `getUserMedia` and `getDisplayMedia` based on `audioSource`.
+- Added check for audio tracks in the returned display media stream.
+- Preserved existing multi-provider logic for subsequent processing.
 
 ### End Timestamp
-**End Timestamp**: 2024-05-22 00:30:00 UTC
+**End Timestamp**: 2024-05-22 12:15:00 UTC

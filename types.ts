@@ -10,9 +10,23 @@ export enum AudioSource {
   SYSTEM = 'SYSTEM'
 }
 
-export enum VoiceType {
-  MALE = 'Orus',
-  FEMALE = 'Aoede'
+export enum STTEngine {
+  GEMINI = 'GEMINI',
+  DEEPGRAM = 'DEEPGRAM',
+  WEBSPEECH = 'WEBSPEECH'
+}
+
+export enum TranslationEngine {
+  GEMINI = 'GEMINI',
+  OLLAMA_GEMMA = 'OLLAMA_GEMMA'
+}
+
+export enum VoiceName {
+  PUCK = 'Puck',
+  CHARON = 'Charon',
+  KORE = 'Kore',
+  FENRIR = 'Fenrir',
+  ZEPHYR = 'Zephyr'
 }
 
 export interface TranscriptionItem {
