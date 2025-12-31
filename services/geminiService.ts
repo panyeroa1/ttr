@@ -26,7 +26,8 @@ export async function decodeAudioData(
   sampleRate: number,
   numChannels: number,
 ): Promise<AudioBuffer> {
-  const dataInt16 = new Int16Array(data.buffer);
+  // Critical fix: ensure we respect byteOffset when creating the view from the underlying buffer
+  const dataInt16 = new Int16Array(data.buffer, data.byteOffset, data.byteLength / 2);
   const frameCount = dataInt16.length / numChannels;
   const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
 
@@ -49,26 +50,21 @@ export interface LiveSessionCallbacks {
 }
 
 // VAD Constants
-const VAD_THRESHOLD_START = 0.004; // Level required to trigger potential speech
-const VAD_THRESHOLD_STOP = 0.001;  // Level required to keep speech "alive"
-const VAD_HANGOVER_MS = 1200;      // How long to keep sending audio after levels drop
-const VAD_PREROLL_MS = 500;        // Lookahead buffer size
-const MIN_SPEECH_DURATION_MS = 150; // Filter out short transient noises
+const VAD_THRESHOLD_START = 0.004;
+const VAD_THRESHOLD_STOP = 0.001;
+const VAD_HANGOVER_MS = 1200;
+const VAD_PREROLL_MS = 500;
+const MIN_SPEECH_DURATION_MS = 150;
 
-/**
- * Tracks if we have hit a hard daily limit.
- */
 let dailyQuotaExceeded = false;
 export const isDailyQuotaReached = () => dailyQuotaExceeded;
 
-/**
- * Utility class to manage rate-limited requests to the Gemini API
- */
 class RequestQueue {
   private queue: (() => Promise<any>)[] = [];
   private processing = false;
   private lastRequestTime = 0;
-  private minInterval = 4000; 
+  // Reduced from 4000 to 200 to allow smooth real-time sentence-by-sentence processing
+  private minInterval = 200; 
 
   async add<T>(requestFn: () => Promise<T>): Promise<T> {
     if (dailyQuotaExceeded) {
@@ -114,7 +110,7 @@ class RequestQueue {
     this.processing = false;
   }
 
-  private async executeWithRetry<T>(requestFn: () => Promise<T>, retries = 3, delay = 3000): Promise<T> {
+  private async executeWithRetry<T>(requestFn: () => Promise<T>, retries = 3, delay = 2000): Promise<T> {
     try {
       return await requestFn();
     } catch (error: any) {
@@ -166,7 +162,6 @@ export class LiveSessionManager {
   private currentTranscription = '';
   private userName: string = 'Speaker';
 
-  // VAD Internal State
   private isSpeaking = false;
   private potentialSpeechStartTime = 0;
   private lastSpeechTime = 0;
@@ -231,7 +226,6 @@ export class LiveSessionManager {
             }
             
             if (message.serverContent?.turnComplete) {
-              console.debug('Turn Complete:', this.currentTranscription);
               if (this.currentTranscription.trim()) {
                 const tagRegex = /\[(Speaker \d+)\]:\s*(.*)/gi;
                 let lastMatch;
@@ -308,60 +302,46 @@ export class LiveSessionManager {
   processAudio(data: Float32Array) {
     if (this.status !== 'connected' || !this.currentSession) return;
     
-    // Calculate RMS for current frame
     let sumSquares = 0;
     for (let i = 0; i < data.length; i++) sumSquares += data[i] * data[i];
     const currentLevel = Math.sqrt(sumSquares / data.length);
     
-    // Convert to PCM16
     const int16 = new Int16Array(data.length);
     for (let i = 0; i < data.length; i++) int16[i] = data[i] * 32768;
     const pcmBytes = new Uint8Array(int16.buffer);
     
     const now = Date.now();
 
-    // VAD Logic State Machine
     if (currentLevel > VAD_THRESHOLD_START) {
-      // Noise detected
       if (!this.isSpeaking) {
         if (this.potentialSpeechStartTime === 0) {
-          // Track start of potential speech
           this.potentialSpeechStartTime = now;
         } else if (now - this.potentialSpeechStartTime > MIN_SPEECH_DURATION_MS) {
-          // Confirmed speech
           this.isSpeaking = true;
           this.potentialSpeechStartTime = 0;
-          // Flush preroll buffer to provide context
           this.preRollBuffer.forEach(chunk => this.sendToModel(chunk));
           this.preRollBuffer = [];
           this.sendToModel(pcmBytes);
         } else {
-          // Still in potential speech window - buffer it
           this.preRollBuffer.push(pcmBytes);
         }
       } else {
-        // Already speaking
         this.sendToModel(pcmBytes);
       }
       this.lastSpeechTime = now;
     } else if (currentLevel > VAD_THRESHOLD_STOP && this.isSpeaking) {
-      // Lower threshold for maintaining speech
       this.sendToModel(pcmBytes);
       this.lastSpeechTime = now;
     } else {
-      // Silence detected
       this.potentialSpeechStartTime = 0;
       
       if (this.isSpeaking) {
         if (now - this.lastSpeechTime < VAD_HANGOVER_MS) {
-          // In hangover period (postroll)
           this.sendToModel(pcmBytes);
         } else {
-          // Hangover ended
           this.isSpeaking = false;
         }
       } else {
-        // Just ambient silence - keep preroll buffer fresh
         this.preRollBuffer.push(pcmBytes);
         const maxPreRollFrames = (VAD_PREROLL_MS / 1000) * (this.sampleRate / data.length);
         if (this.preRollBuffer.length > maxPreRollFrames) {
@@ -418,18 +398,27 @@ Text: "${text}"`,
 
   async generateSpeech(text: string, voiceName: VoiceName = VoiceName.KORE) {
     return apiQueue.add(async () => {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash-preview-tts",
-        contents: [{ parts: [{ text: text }] }],
-        config: {
-          responseModalities: [Modality.AUDIO],
-          speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceName } },
+      try {
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        const response = await ai.models.generateContent({
+          model: "gemini-2.5-flash-preview-tts",
+          contents: [{ parts: [{ text: text }] }],
+          config: {
+            responseModalities: [Modality.AUDIO],
+            speechConfig: {
+              voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceName } },
+            },
           },
-        },
-      });
-      return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+        });
+        const audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+        if (!audio) {
+          console.error("Gemini TTS returned no audio data for text:", text);
+        }
+        return audio;
+      } catch (err) {
+        console.error("Gemini generateSpeech Error:", err);
+        throw err;
+      }
     });
   }
 
@@ -469,7 +458,8 @@ Text: "${text}"`,
         model_id: 'sonic-english',
         transcript: text,
         voice: { mode: 'id', id: voiceId },
-        output_format: { container: 'wav', sample_rate: 24000, encoding: 'pcm_f32le' }
+        // Use standard wav container for better browser native decoding
+        output_format: { container: 'wav', sample_rate: 24000, encoding: 'pcm_s16le' }
       })
     });
     if (!response.ok) throw new Error("Cartesia API Error");

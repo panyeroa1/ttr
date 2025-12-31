@@ -25,7 +25,8 @@ export enum TTSEngine {
   GEMINI = 'GEMINI',
   ELEVENLABS = 'ELEVENLABS',
   DEEPGRAM = 'DEEPGRAM',
-  CARTESIA = 'CARTESIA'
+  CARTESIA = 'CARTESIA',
+  BROWSER_NATIVE = 'BROWSER_NATIVE'
 }
 
 export enum VoiceName {

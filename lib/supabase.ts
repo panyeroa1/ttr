@@ -75,7 +75,7 @@ export const fetchTranscripts = async (room_name: string) => {
       .from('transcriptions')
       .select('*')
       .eq('room_name', room_name)
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: false });
 
     return { data, error };
   });

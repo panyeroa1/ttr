@@ -1,4 +1,3 @@
-
 import React, { useEffect, useRef } from 'react';
 import { TranscriptionItem, TranslationItem } from '../types';
 import { MessageSquare, Languages as LangIcon } from 'lucide-react';
@@ -16,11 +15,9 @@ const LiveCaptions: React.FC<LiveCaptionsProps> = ({ transcripts, translations, 
 
   useEffect(() => {
     if (scrollRef.current) {
-      const scrollOptions: ScrollToOptions = {
-        top: scrollRef.current.scrollHeight,
-        behavior: 'smooth'
-      };
-      scrollRef.current.scrollTo(scrollOptions);
+      // Both columns are now in descending order (newest at top)
+      // Standardize scroll behavior to stay at the top to focus on new messages
+      scrollRef.current.scrollTo({ top: 0, behavior: 'smooth' });
     }
   }, [transcripts, translations]);
 

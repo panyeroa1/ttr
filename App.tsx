@@ -5,7 +5,7 @@ import { supabase, saveTranscript, saveTranslation, fetchTranscripts, getUserPro
 import SessionControls from './components/SessionControls';
 import LiveCaptions from './components/LiveCaptions';
 import SubtitlesOverlay from './components/SubtitlesOverlay';
-import { Sparkles, Database, AlertCircle, X, Wifi, CloudLightning, Mic2, VolumeX, Settings, Server, Globe, Cpu, Subtitles as SubtitlesIcon, Info, LayoutDashboard, SlidersHorizontal, MessageSquare, Volume2, AudioWaveform } from 'lucide-react';
+import { Sparkles, Database, AlertCircle, X, Wifi, CloudLightning, Mic2, VolumeX, Settings, Server, Globe, Cpu, Subtitles as SubtitlesIcon, Info, LayoutDashboard, SlidersHorizontal, MessageSquare, Volume2, AudioWaveform, UserCircle, Monitor } from 'lucide-react';
 
 const SYNC_DEBOUNCE_MS = 250;
 const DEFAULT_ROOM = 'default-room';
@@ -35,16 +35,19 @@ const App: React.FC = () => {
   const [showSubtitles, setShowSubtitles] = useState(true);
   const [currentSubtitle, setCurrentSubtitle] = useState<{text: string, isFinal: boolean}>({text: '', isFinal: false});
   const [isRateLimited, setIsRateLimited] = useState(false);
+  const [usingFallbackTTS, setUsingFallbackTTS] = useState(false);
 
   // Engines
   const [sttProvider, setSttProvider] = useState<STTEngine>(STTEngine.GEMINI);
   const [translationProvider, setTranslationProvider] = useState<TranslationEngine>(TranslationEngine.GEMINI);
   const [ttsProvider, setTtsProvider] = useState<TTSEngine>(TTSEngine.GEMINI);
 
-  // API Keys
+  // API Keys & Voice IDs
   const [deepgramKey, setDeepgramKey] = useState('');
   const [elevenLabsKey, setElevenLabsKey] = useState('');
+  const [elevenLabsVoiceId, setElevenLabsVoiceId] = useState('21m00Tcm4TlvDq8ikWAM');
   const [cartesiaKey, setCartesiaKey] = useState('');
+  const [cartesiaVoiceId, setCartesiaVoiceId] = useState('79a125e8-cd45-4c13-8a67-01224ca5850b');
   const [deepgramTtsKey, setDeepgramTtsKey] = useState('');
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434/api/generate');
 
@@ -62,6 +65,9 @@ const App: React.FC = () => {
   const syncTimeoutRef = useRef<number | null>(null);
   const activeTtsCountRef = useRef<number>(0);
   const processedTextOffsetRef = useRef<Map<string, number>>(new Map());
+
+  // Sequential processing queue to ensure strictly chronological turn handling for AUDIO
+  const processingQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   const requestWakeLock = async () => {
     if ('wakeLock' in navigator) {
@@ -137,20 +143,51 @@ const App: React.FC = () => {
   };
 
   /**
-   * Enhanced sentence boundary detection logic.
-   * Uses a robust set of abbreviations and heuristics to determine when to split 
-   * a stream of text into sentences for high-quality translation.
+   * Browser Native TTS fallback using Web Speech API
    */
+  const speakWithBrowserNative = (text: string, lang: string): Promise<void> => {
+    return new Promise((resolve) => {
+      if (!('speechSynthesis' in window)) {
+        console.warn("Browser does not support Speech Synthesis");
+        resolve();
+        return;
+      }
+
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = lang;
+      
+      utterance.onstart = () => {
+        setIsTtsPlaying(true);
+        activeTtsCountRef.current++;
+      };
+      
+      utterance.onend = () => {
+        activeTtsCountRef.current--;
+        if (activeTtsCountRef.current <= 0) setIsTtsPlaying(false);
+        resolve();
+      };
+
+      utterance.onerror = (e) => {
+        console.error("Browser Native TTS Error:", e);
+        activeTtsCountRef.current--;
+        if (activeTtsCountRef.current <= 0) setIsTtsPlaying(false);
+        resolve();
+      };
+
+      window.speechSynthesis.speak(utterance);
+    });
+  };
+
   const segmentIntoSentences = (text: string, isFinal: boolean) => {
     const abbreviations = [
       'Mr', 'Mrs', 'Ms', 'Dr', 'Prof', 'Sr', 'Jr', 'St', 'Co', 'Inc', 'Ltd', 
       'vs', 'approx', 'min', 'max', 'dept', 'univ', 'vol', 'ed', 'est', 'etc',
       'Jan', 'Feb', 'Mar', 'Apr', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
       'U.S', 'U.K', 'E.U', 'B.C', 'A.D', 'p.m', 'a.m', 'i.e', 'e.g', 'c.f',
-      'D.C', 'L.A', 'N.Y', 'Ph.D', 'M.D'
+      'D.C', 'L.A', 'N.Y', 'Ph.D', 'M.D', 'viz', 'cf', 'sq', 'ft', 'lb', 'oz',
+      'Corp', 'Gov', 'Rep', 'Sen', 'Rev', 'Hon', 'Capt', 'Col', 'Gen'
     ];
     
-    // Pattern to catch sentence terminators (. ! ? Chinese equivalents)
     const sentenceRegex = /([.!?\u3002\uff01\uff1f]+|(?:\.\.\.))["'）)\]]*(\s+|$)/g;
     const sentences: string[] = [];
     let match;
@@ -161,41 +198,34 @@ const App: React.FC = () => {
       const puncEndIndex = match.index + punc.length;
       const fullSegment = text.substring(start, puncEndIndex).trim();
       
-      // Look at the word preceding the punctuation
       const lastWordMatch = fullSegment.match(/(\S+)(?:[.!?\u3002\uff01\uff1f]+)$/);
       if (lastWordMatch) {
-        const lastWord = lastWordMatch[1]; // e.g., "Mr" from "Mr."
+        const lastWord = lastWordMatch[1];
+        const isDecimal = /\d$/.test(lastWord) && /^\d/.test(text.substring(puncEndIndex).trim());
         const isAbbrev = abbreviations.some(a => a.toLowerCase() === lastWord.toLowerCase()) || 
-                        /^[A-Z]$/.test(lastWord); // Handle single letter initials like "J."
+                        /^[A-Z]$/.test(lastWord); 
         
-        if (isAbbrev && !isFinal) {
-          // It's an abbreviation, don't split here yet unless the stream is finished
+        if ((isAbbrev || isDecimal) && !isFinal) {
           continue;
         }
       }
 
-      // Found a valid boundary
       sentences.push(text.substring(start, match.index + match[0].length).trim());
       start = match.index + match[0].length;
     }
 
     const remaining = text.substring(start).trim();
-    
-    // Handle the end of the input
     if (isFinal && remaining.length > 0) {
       sentences.push(remaining);
       return { sentences, lastIndex: text.length };
     }
 
-    // Fallback for extremely long unpunctuated segments (VAD might be failing or speaker is non-stop)
     if (remaining.length > MAX_UNPUNCTUATED_LENGTH) {
-      // Try to split on a comma first as a soft boundary
       const lastComma = remaining.lastIndexOf(',');
       if (lastComma > remaining.length * 0.6) {
         sentences.push(remaining.substring(0, lastComma + 1).trim());
         return { sentences, lastIndex: start + lastComma + 1 };
       }
-      // If no comma, split on the last space to avoid cutting words
       const lastSpace = remaining.lastIndexOf(' ');
       if (lastSpace > remaining.length * 0.8) {
         sentences.push(remaining.substring(0, lastSpace).trim());
@@ -209,6 +239,7 @@ const App: React.FC = () => {
   const processTranscriptItem = useCallback(async (item: any, playAudio: boolean = true) => {
     if (!item || !item.text) return;
 
+    // 1. INSTANT UI UPDATE (Non-queued)
     const speakerName = item.sender || displayName;
     setActiveSpeakerName(speakerName);
     
@@ -219,11 +250,10 @@ const App: React.FC = () => {
       const idx = prev.findIndex(t => t.id === item.id);
       if (idx > -1) {
         const updated = [...prev];
-        // Use nullish coalescing to correctly preserve boolean false
         updated[idx] = { ...updated[idx], text: item.text, isFinal: item.isFinal ?? true, speaker: speakerName };
         return updated;
       }
-      return [...prev, { id: item.id, text: item.text, isFinal: item.isFinal ?? true, speaker: speakerName }];
+      return [{ id: item.id, text: item.text, isFinal: item.isFinal ?? true, speaker: speakerName }, ...prev];
     });
 
     const lastOffset = processedTextOffsetRef.current.get(item.id) || 0;
@@ -234,91 +264,128 @@ const App: React.FC = () => {
       setCurrentSubtitle({ text: newContent.trim(), isFinal: item.isFinal });
     }
 
+    // 2. QUEUED AUDIO GENERATION & TRANSLATION
     if (role !== UserRole.LISTENER) return;
-    if (isRateLimited || isDailyQuotaReached()) return;
-
+    
     const { sentences, lastIndex } = segmentIntoSentences(newContent, item.isFinal);
+    if (sentences.length === 0) return;
 
-    if (sentences.length > 0) {
-      processedTextOffsetRef.current.set(item.id, lastOffset + lastIndex);
-      for (const sentence of sentences) {
-        try {
-          const translated = translationProvider === TranslationEngine.GEMINI 
-            ? await gemini.translate(sentence, 'auto', targetLang)
-            : await translateViaOllama(sentence, targetLang);
+    processedTextOffsetRef.current.set(item.id, lastOffset + lastIndex);
 
-          const transId = crypto.randomUUID();
-          
-          if (currentUserId) {
-            await saveTranslation({
-              id: transId,
-              user_id: currentUserId,
-              source_lang: 'auto',
-              target_lang: targetLang,
-              original_text: sentence,
-              translated_text: translated
-            });
-          }
+    processingQueueRef.current = processingQueueRef.current
+      .catch(() => {}) 
+      .then(async () => {
+        if (isRateLimited || isDailyQuotaReached()) {
+           // If we are rate limited on cloud, but playAudio is requested, try browser native directly
+           if (playAudio) {
+             for (const sentence of sentences) {
+               await speakWithBrowserNative(sentence, targetLang);
+             }
+           }
+           return;
+        }
 
-          setTranslations(prev => [...prev, { 
-            id: transId, 
-            transcriptId: item.id, 
-            text: translated, 
-            lang: targetLang.toUpperCase() 
-          }]);
+        for (const sentence of sentences) {
+          console.debug(`[Audio-Queue] Processing: "${sentence}"`);
+          try {
+            const translated = translationProvider === TranslationEngine.GEMINI 
+              ? await gemini.translate(sentence, 'auto', targetLang)
+              : await translateViaOllama(sentence, targetLang);
 
-          if (playAudio && outputAudioContextRef.current) {
-            let audioBuffer: AudioBuffer | null = null;
-            const ctx = outputAudioContextRef.current;
-            if (ctx.state === 'suspended') await ctx.resume();
+            const transId = crypto.randomUUID();
+            
+            if (currentUserId) {
+              saveTranslation({
+                id: transId,
+                user_id: currentUserId,
+                source_lang: 'auto',
+                target_lang: targetLang,
+                original_text: sentence,
+                translated_text: translated
+              });
+            }
 
-            try {
-              if (ttsProvider === TTSEngine.GEMINI) {
-                const audioData = await gemini.generateSpeech(translated, voiceName);
-                if (audioData) {
-                  audioBuffer = await decodeAudioData(decode(audioData), ctx, 24000, 1);
-                }
-              } else if (ttsProvider === TTSEngine.ELEVENLABS && elevenLabsKey) {
-                const data = await gemini.generateElevenLabsSpeech(translated, elevenLabsKey);
-                audioBuffer = await ctx.decodeAudioData(data);
-              } else if (ttsProvider === TTSEngine.DEEPGRAM && deepgramTtsKey) {
-                const data = await gemini.generateDeepgramSpeech(translated, deepgramTtsKey);
-                audioBuffer = await ctx.decodeAudioData(data);
-              } else if (ttsProvider === TTSEngine.CARTESIA && cartesiaKey) {
-                const data = await gemini.generateCartesiaSpeech(translated, cartesiaKey);
-                audioBuffer = await ctx.decodeAudioData(data);
+            setTranslations(prev => [{ 
+              id: transId, 
+              transcriptId: item.id, 
+              text: translated, 
+              lang: targetLang.toUpperCase() 
+            }, ...prev]);
+
+            if (playAudio) {
+              if (ttsProvider === TTSEngine.BROWSER_NATIVE) {
+                await speakWithBrowserNative(translated, targetLang);
+                continue;
               }
-            } catch (err) {
-              console.warn("TTS Generation Failed:", err);
-            }
 
-            if (audioBuffer) {
-              nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
-              const source = ctx.createBufferSource();
-              source.buffer = audioBuffer;
-              source.connect(ctx.destination);
-              activeTtsCountRef.current++;
-              setIsTtsPlaying(true);
-              source.onended = () => {
-                activeTtsCountRef.current--;
-                if (activeTtsCountRef.current <= 0) { setIsTtsPlaying(false); }
-              };
-              source.start(nextStartTimeRef.current);
-              nextStartTimeRef.current += audioBuffer.duration;
+              const ctx = outputAudioContextRef.current;
+              if (ctx && ctx.state === 'suspended') await ctx.resume();
+
+              let audioBuffer: AudioBuffer | null = null;
+              let attemptFallback = false;
+
+              try {
+                if (ttsProvider === TTSEngine.GEMINI) {
+                  const audioData = await gemini.generateSpeech(translated, voiceName);
+                  if (audioData) {
+                    audioBuffer = await decodeAudioData(decode(audioData), ctx!, 24000, 1);
+                  } else {
+                    attemptFallback = true;
+                  }
+                } else if (ttsProvider === TTSEngine.ELEVENLABS && elevenLabsKey) {
+                  const data = await gemini.generateElevenLabsSpeech(translated, elevenLabsKey, elevenLabsVoiceId);
+                  audioBuffer = await ctx!.decodeAudioData(data);
+                } else if (ttsProvider === TTSEngine.DEEPGRAM && deepgramTtsKey) {
+                  const data = await gemini.generateDeepgramSpeech(translated, deepgramTtsKey);
+                  audioBuffer = await ctx!.decodeAudioData(data);
+                } else if (ttsProvider === TTSEngine.CARTESIA && cartesiaKey) {
+                  const data = await gemini.generateCartesiaSpeech(translated, cartesiaKey, cartesiaVoiceId);
+                  audioBuffer = await ctx!.decodeAudioData(data);
+                } else {
+                  attemptFallback = true;
+                }
+              } catch (err) {
+                console.warn("[TTS] Cloud Provider Failed, falling back to Browser Native:", err);
+                attemptFallback = true;
+              }
+
+              if (audioBuffer) {
+                const lookahead = 0.05;
+                nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx!.currentTime + lookahead);
+                
+                const source = ctx!.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(ctx!.destination);
+                
+                activeTtsCountRef.current++;
+                setIsTtsPlaying(true);
+                
+                source.onended = () => {
+                  activeTtsCountRef.current--;
+                  if (activeTtsCountRef.current <= 0) { setIsTtsPlaying(false); }
+                };
+                
+                source.start(nextStartTimeRef.current);
+                nextStartTimeRef.current += audioBuffer.duration;
+              } else if (attemptFallback) {
+                setUsingFallbackTTS(true);
+                await speakWithBrowserNative(translated, targetLang);
+              }
             }
-          }
-        } catch (err: any) {
-          console.error("Translation Pipeline Error:", err);
-          const errorMsg = err?.message || "";
-          if (errorMsg.includes('429') || errorMsg.includes('RESOURCE_EXHAUSTED') || errorMsg === "DAILY_QUOTA_REACHED") {
-            setIsRateLimited(true);
-            setLastError("Gemini API Daily Quota Exceeded. Translation and TTS paused.");
-            setTimeout(() => setIsRateLimited(false), 30000);
+          } catch (err: any) {
+            console.error("[Audio-Queue] Sentence Failure:", err);
+            const errorMsg = err?.message || "";
+            if (errorMsg.includes('429') || errorMsg.includes('RESOURCE_EXHAUSTED') || errorMsg === "DAILY_QUOTA_REACHED") {
+              setIsRateLimited(true);
+              setLastError("Cloud API Quota Exceeded. Engaging browser native audio fallback.");
+              // Don't wait, just process with native for current batch
+              await speakWithBrowserNative(sentence, targetLang);
+              setTimeout(() => setIsRateLimited(false), 30000);
+            }
           }
         }
-      }
-    }
-  }, [targetLang, voiceName, displayName, translationProvider, ttsProvider, elevenLabsKey, cartesiaKey, deepgramTtsKey, ollamaUrl, currentUserId, isRateLimited, role]);
+      });
+  }, [targetLang, voiceName, displayName, translationProvider, ttsProvider, elevenLabsKey, elevenLabsVoiceId, cartesiaKey, cartesiaVoiceId, deepgramTtsKey, ollamaUrl, currentUserId, isRateLimited, role]);
 
   useEffect(() => {
     if (!isActive || role !== UserRole.LISTENER) return;
@@ -366,15 +433,32 @@ const App: React.FC = () => {
       setTranslations([]);
       setCurrentSubtitle({text: '', isFinal: false});
       processedTextOffsetRef.current.clear();
+      nextStartTimeRef.current = 0;
+      processingQueueRef.current = Promise.resolve();
+      setUsingFallbackTTS(false);
     } else {
       if (role === UserRole.IDLE) return;
       try {
         await requestWakeLock();
+        
         if (role === UserRole.LISTENER) {
           setSessionStatus('connecting');
           const { data, error } = await fetchTranscripts(DEFAULT_ROOM);
           if (error) throw error;
-          if (data) for (const item of data) await processTranscriptItem(item, false);
+          if (data) {
+            setTranscripts(data);
+            data.forEach((item, index) => {
+              if (index === 0) {
+                processedTextOffsetRef.current.set(item.id, 0);
+              } else {
+                processedTextOffsetRef.current.set(item.id, item.text.length);
+              }
+            });
+            if (data.length > 0) {
+              console.debug("[Init] Autoplaying latest transcription for listener join...");
+              processTranscriptItem(data[0], true);
+            }
+          }
           setSessionStatus('connected');
         }
 
@@ -409,12 +493,8 @@ const App: React.FC = () => {
                 const senderName = speaker || displayName;
                 setCurrentSubtitle({ text, isFinal });
                 syncToDatabase(text, isFinal, uid, senderName);
-                
-                // Call processTranscriptItem for interim results too so they appear in the UI list immediately
                 processTranscriptItem({ id: uid, text, sender: senderName, isFinal: isFinal }, false);
-                
                 if (isFinal) {
-                  // Utterance finalized, immediately start a new ID for the next thought
                   currentUtteranceIdRef.current = crypto.randomUUID();
                 }
               },
@@ -508,9 +588,18 @@ const App: React.FC = () => {
           <div className="bg-amber-500/15 border border-amber-500/40 backdrop-blur-2xl p-5 rounded-3xl flex items-start gap-4 shadow-2xl">
             <Info className="w-5 h-5 text-amber-500 shrink-0 mt-1" />
             <div className="flex-1 min-w-0">
-              <h4 className="text-amber-400 font-black text-xs uppercase tracking-widest mb-1">Quota Warning</h4>
-              <p className="text-amber-100/80 text-sm">Gemini API daily quota reached. Translation is currently paused. Please wait or upgrade your API plan.</p>
+              <h4 className="text-amber-400 font-black text-xs uppercase tracking-widest mb-1">Status Alert</h4>
+              <p className="text-amber-100/80 text-sm">Cloud API quota reached. Switched to browser-native fallback for uninterrupted service.</p>
             </div>
+          </div>
+        </div>
+      )}
+
+      {usingFallbackTTS && !isRateLimited && !isDailyQuotaReached() && (
+        <div className="fixed top-20 right-4 z-[100] w-auto animate-in slide-in-from-right duration-300">
+          <div className="bg-blue-500/15 border border-blue-500/40 backdrop-blur-2xl px-4 py-2 rounded-full flex items-center gap-3 shadow-xl">
+             <Volume2 className="w-3.5 h-3.5 text-blue-400" />
+             <span className="text-[10px] font-black text-blue-400 uppercase tracking-widest">Degraded Audio Active</span>
           </div>
         </div>
       )}
@@ -590,34 +679,14 @@ const App: React.FC = () => {
                     <SettingBtn active={sttProvider === STTEngine.DEEPGRAM} onClick={() => setSttProvider(STTEngine.DEEPGRAM)} icon={Server} label="Deepgram" description="Ultra low latency" />
                     <SettingBtn active={sttProvider === STTEngine.WEBSPEECH} onClick={() => setSttProvider(STTEngine.WEBSPEECH)} icon={Globe} label="WebSpeech" description="Privacy-first, browser native" />
                   </div>
-                  {sttProvider === STTEngine.DEEPGRAM && (
-                    <div className="mt-4 animate-in slide-in-from-top-2">
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Deepgram API Key</label>
-                      <input 
-                        type="password" placeholder="dg_xxxxxxxxxxxx" value={deepgramKey} 
-                        onChange={(e) => setDeepgramKey(e.target.value)}
-                        className="w-full bg-slate-800 border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 outline-none transition-all"
-                      />
-                    </div>
-                  )}
                 </SettingsSection>
 
                 {/* Translation Section */}
                 <SettingsSection icon={MessageSquare} title="Translation" description="AI powered chat completions">
                   <div className="grid grid-cols-1 gap-3">
                     <SettingBtn active={translationProvider === TranslationEngine.GEMINI} onClick={() => setTranslationProvider(TranslationEngine.GEMINI)} icon={Sparkles} label="Gemini Flash" description="Fastest cloud translation" />
-                    <SettingBtn active={translationProvider === TranslationEngine.OLLAMA_GEMMA} onClick={() => setTranslationProvider(TranslationEngine.OLLAMA_GEMMA)} icon={Cpu} label="Gemma (Ollama)" description="Self-hosted local model" />
+                    <SettingBtn active={translationProvider === TranslationEngine.OLLAMA_GEMMA} onClick={() => setTranslationProvider(TranslationEngine.OLLAMA_GEMMA)} icon={Cpu} label="Gemma (Ollama Cloud)" description="High-performance remote model" />
                   </div>
-                  {translationProvider === TranslationEngine.OLLAMA_GEMMA && (
-                    <div className="mt-4 animate-in slide-in-from-top-2">
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Ollama Endpoint</label>
-                      <input 
-                        type="text" placeholder="http://localhost:11434" value={ollamaUrl} 
-                        onChange={(e) => setOllamaUrl(e.target.value)}
-                        className="w-full bg-slate-800 border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 outline-none transition-all"
-                      />
-                    </div>
-                  )}
                 </SettingsSection>
 
                 {/* TTS Section */}
@@ -625,59 +694,13 @@ const App: React.FC = () => {
                   <div className="grid grid-cols-1 gap-3">
                     <SettingBtn active={ttsProvider === TTSEngine.GEMINI} onClick={() => setTtsProvider(TTSEngine.GEMINI)} icon={Sparkles} label="Gemini TTS" description="Integrated high-quality" />
                     <SettingBtn active={ttsProvider === TTSEngine.ELEVENLABS} onClick={() => setTtsProvider(TTSEngine.ELEVENLABS)} icon={AudioWaveform} label="ElevenLabs" description="Ultra-realistic voices" />
+                    <SettingBtn active={ttsProvider === TTSEngine.BROWSER_NATIVE} onClick={() => setTtsProvider(TTSEngine.BROWSER_NATIVE)} icon={Monitor} label="Browser Native" description="No latency, high privacy" />
                     <SettingBtn active={ttsProvider === TTSEngine.DEEPGRAM} onClick={() => setTtsProvider(TTSEngine.DEEPGRAM)} icon={Server} label="Deepgram TTS" description="Optimized low-latency" />
-                    <SettingBtn active={ttsProvider === TTSEngine.CARTESIA} onClick={() => setTtsProvider(TTSEngine.CARTESIA)} icon={Cpu} label="Cartesia" description="State-of-the-art inference" />
+                    <SettingBtn active={ttsProvider === TTSEngine.CARTESIA} icon={Cpu} label="Cartesia" description="State-of-the-art inference" />
                   </div>
-                  
-                  {ttsProvider === TTSEngine.ELEVENLABS && (
-                    <div className="mt-4 animate-in slide-in-from-top-2">
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">ElevenLabs API Key</label>
-                      <input 
-                        type="password" placeholder="xi-apiKey-xxxxxxxx" value={elevenLabsKey} 
-                        onChange={(e) => setElevenLabsKey(e.target.value)}
-                        className="w-full bg-slate-800 border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 outline-none transition-all"
-                      />
-                    </div>
-                  )}
-                  {ttsProvider === TTSEngine.DEEPGRAM && (
-                    <div className="mt-4 animate-in slide-in-from-top-2">
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Deepgram API Key (TTS)</label>
-                      <input 
-                        type="password" placeholder="dg_xxxxxxxxxxxx" value={deepgramTtsKey} 
-                        onChange={(e) => setDeepgramTtsKey(e.target.value)}
-                        className="w-full bg-slate-800 border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 outline-none transition-all"
-                      />
-                    </div>
-                  )}
-                  {ttsProvider === TTSEngine.CARTESIA && (
-                    <div className="mt-4 animate-in slide-in-from-top-2">
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Cartesia API Key</label>
-                      <input 
-                        type="password" placeholder="cartesia-apiKey-xxxx" value={cartesiaKey} 
-                        onChange={(e) => setCartesiaKey(e.target.value)}
-                        className="w-full bg-slate-800 border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 outline-none transition-all"
-                      />
-                    </div>
-                  )}
                 </SettingsSection>
 
-                {/* Gemini Voice Sub-Section (Only for Gemini TTS) */}
-                {ttsProvider === TTSEngine.GEMINI && (
-                  <SettingsSection icon={AudioWaveform} title="Gemini Voice" description="Select pre-built voice">
-                    <div className="grid grid-cols-1 gap-2">
-                      {[
-                        { id: VoiceName.KORE, name: 'Kore', desc: 'Soft & Friendly' },
-                        { id: VoiceName.PUCK, name: 'Puck', desc: 'Deep & Resonant' },
-                        { id: VoiceName.ZEPHYR, name: 'Zephyr', desc: 'Clear & Crisp' },
-                        { id: VoiceName.FENRIR, name: 'Fenrir', desc: 'Bold & Direct' },
-                        { id: VoiceName.CHARON, name: 'Charon', desc: 'Gravelly & Strong' }
-                      ].map(v => (
-                        <SettingBtn key={v.id} active={voiceName === v.id} onClick={() => setVoiceName(v.id as VoiceName)} icon={Volume2} label={v.name} description={v.desc} />
-                      ))}
-                    </div>
-                  </SettingsSection>
-                )}
-
+                {/* Interface Section */}
                 <SettingsSection icon={SubtitlesIcon} title="Interface" description="Realtime visual feedback">
                   <button 
                     onClick={() => setShowSubtitles(!showSubtitles)}

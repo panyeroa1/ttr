@@ -8,13 +8,13 @@ TTR is designed to facilitate cross-language communication in real-time. It leve
 - [x] **Database Persistence**: Transcripts and translations are stored in Supabase for auditability.
 - [x] **Automatic Translation**: Finalized transcripts trigger a Gemini-powered translation worker (for listeners only).
 - [x] **Real-time TTS**: Translated text is automatically converted to audio using Gemini TTS (for listeners only).
-- [x] **Dual Modes**: Dedicated "Speak" and "Listen" configurations. Speak mode is optimized for minimal overhead (transcribe + save only).
+- [x] **Dual Mode Robustness**: Dedicated "Speak" and "Listen" configurations with **graceful degradation** to browser-native TTS if cloud providers fail.
 - [x] **Tabbed Navigation**: Dedicated 'Live' and 'Settings' tabs for clear separation of concerns.
 - [x] **Comprehensive Settings**: Full control over STT engines, Translation providers (Gemini vs Local Ollama), and TTS voices.
 - [x] **Rate-Limit Safeguards**: Enhanced `RequestQueue` with `retryDelay` parsing and UI-level quota warnings.
 
 ## Known Constraints
-- **Gemini Free Tier Quotas**: The default daily limit for `gemini-3-flash` is 20 requests. Users on this tier will see a "Quota Warning" once this limit is reached, and translations will be paused.
+- **Gemini Free Tier Quotas**: The default daily limit for `gemini-3-flash` is 20 requests. Users on this tier will see a "Quota Warning" once this limit is reached, and the app will automatically switch to browser-native audio fallback.
 
 ## Not Yet Implemented
 - [ ] Multi-speaker identification (currently optimized for a single active speaker per room).
