@@ -1,36 +1,36 @@
 
 # DEV SESSION LOG
 
-## Session ID: 20240520-100000
-... (previous content)
+## Session ID: 20240521-110000
+**Start Timestamp**: 2024-05-21 11:00:00 UTC
+... (previous summary)
 
-## Session ID: 20240520-180000
-... (previous content)
-**End Timestamp**: 2024-05-20 18:15:00 UTC
-
-## Session ID: 20240521-090000
-**Start Timestamp**: 2024-05-21 09:00:00 UTC
+## Session ID: 20240521-120000
+**Start Timestamp**: 2024-05-21 12:00:00 UTC
 
 ### Objective(s)
-1. Expand the target language list with specific regional dialects.
-2. Add Dutch (West Flemish), Ilocano, Cebuano, and other major regional variants.
+1. Simplify RLS resolution for the user.
+2. Add "Copy SQL Fix" functionality to the UI alert.
+3. Enhance error messaging to specifically identify RLS vs other DB errors.
 
 ### Scope Boundaries
-- `components/SessionControls.tsx` `LANGUAGES` array.
+- `App.tsx` (UI components only).
 
 ### Files Inspected
-- `components/SessionControls.tsx`
+- `App.tsx`
 
 ### Assumptions / Risks
-- Regional dialects may not have perfect TTS support in all variants, but STT and translation will benefit from explicit targeting.
+- The user will see the alert and understand they need to run the SQL in their Supabase dashboard.
 
 ### End Timestamp
-**End Timestamp**: 2024-05-21 09:10:00 UTC
+**End Timestamp**: 2024-05-21 12:10:00 UTC
 
 ### Summary of Changes
-- Added 15+ regional dialects to the `LANGUAGES` list, including West Flemish, Swiss German, Bavarian, Catalan, Basque, Ilocano, Cebuano, Hiligaynon, and Waray-Waray.
-- Organized them into their respective linguistic categories.
+- Added a `SQL_FIX` constant containing the necessary Supabase commands.
+- Implemented a `Copy SQL Fix` button in the `App.tsx` error alert.
+- Improved the visual design of the error alert for higher visibility.
+- Updated the Database Status header button to be interactive when in error state.
 
 ### Files Changed
-- `components/SessionControls.tsx`
+- `App.tsx`
 - `DEV_SESSION_LOG.md`
