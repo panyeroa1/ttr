@@ -1,6 +1,6 @@
 import React from 'react';
-import { Mic, Headphones, Languages, Square, Play, MonitorSpeaker, Disc, ChevronDown } from 'lucide-react';
-import { UserRole, AudioSource } from '../types';
+import { Mic, Headphones, Languages, Square, Play, MonitorSpeaker, Disc, ChevronDown, UserRound } from 'lucide-react';
+import { UserRole, AudioSource, VoiceName } from '../types';
 import { AudioLevelMeter } from '../App';
 
 interface SessionControlsProps {
@@ -12,6 +12,8 @@ interface SessionControlsProps {
   onTargetLangChange: (lang: string) => void;
   audioSource: AudioSource;
   onAudioSourceChange: (source: AudioSource) => void;
+  voiceName: VoiceName;
+  onVoiceNameChange: (voice: VoiceName) => void;
   audioLevel?: number;
 }
 
@@ -70,15 +72,10 @@ const LANGUAGES = [
   { code: 'en-US', name: 'English (United States)' },
   { code: 'et-EE', name: 'Estonian (Estonia)' },
   { code: 'fi-FI', name: 'Finnish (Finland)' },
-  { code: 'fr-BE', name: 'French (Belgium)' },
-  { code: 'fr-CA', name: 'French (Canada)' },
   { code: 'fr-FR', name: 'French (France)' },
-  { code: 'fr-CH', name: 'French (Switzerland)' },
   { code: 'gl-ES', name: 'Galician (Spain)' },
   { code: 'ka-GE', name: 'Georgian (Georgia)' },
-  { code: 'de-AT', name: 'German (Austria)' },
   { code: 'de-DE', name: 'German (Germany)' },
-  { code: 'de-CH', name: 'German (Switzerland)' },
   { code: 'el-GR', name: 'Greek (Greece)' },
   { code: 'gu-IN', name: 'Gujarati (India)' },
   { code: 'he-IL', name: 'Hebrew (Israel)' },
@@ -87,7 +84,6 @@ const LANGUAGES = [
   { code: 'is-IS', name: 'Icelandic (Iceland)' },
   { code: 'id-ID', name: 'Indonesian (Indonesia)' },
   { code: 'it-IT', name: 'Italian (Italy)' },
-  { code: 'it-CH', name: 'Italian (Switzerland)' },
   { code: 'ja-JP', name: 'Japanese (Japan)' },
   { code: 'kn-IN', name: 'Kannada (India)' },
   { code: 'kk-KZ', name: 'Kazakh (Kazakhstan)' },
@@ -115,45 +111,32 @@ const LANGUAGES = [
   { code: 'si-LK', name: 'Sinhala (Sri Lanka)' },
   { code: 'sk-SK', name: 'Slovak (Slovakia)' },
   { code: 'sl-SI', name: 'Slovenian (Slovenia)' },
-  { code: 'es-AR', name: 'Spanish (Argentina)' },
-  { code: 'es-BO', name: 'Spanish (Bolivia)' },
-  { code: 'es-CL', name: 'Spanish (Chile)' },
-  { code: 'es-CO', name: 'Spanish (Colombia)' },
-  { code: 'es-CR', name: 'Spanish (Costa Rica)' },
-  { code: 'es-DO', name: 'Spanish (Dominican Republic)' },
-  { code: 'es-EC', name: 'Spanish (Ecuador)' },
-  { code: 'es-SV', name: 'Spanish (El Salvador)' },
-  { code: 'es-GT', name: 'Spanish (Guatemala)' },
-  { code: 'es-HN', name: 'Spanish (Honduras)' },
   { code: 'es-MX', name: 'Spanish (Mexico)' },
-  { code: 'es-NI', name: 'Spanish (Nicaragua)' },
-  { code: 'es-PA', name: 'Spanish (Panama)' },
-  { code: 'es-PY', name: 'Spanish (Paraguay)' },
-  { code: 'es-PE', name: 'Spanish (Peru)' },
-  { code: 'es-PR', name: 'Spanish (Puerto Rico)' },
   { code: 'es-ES', name: 'Spanish (Spain)' },
-  { code: 'es-US', name: 'Spanish (United States)' },
-  { code: 'es-UY', name: 'Spanish (Uruguay)' },
-  { code: 'es-VE', name: 'Spanish (Venezuela)' },
   { code: 'sw-KE', name: 'Swahili (Kenya)' },
-  { code: 'sw-TZ', name: 'Swahili (Tanzania)' },
   { code: 'sv-SE', name: 'Swedish (Sweden)' },
   { code: 'ta-IN', name: 'Tamil (India)' },
-  { code: 'ta-LK', name: 'Tamil (Sri Lanka)' },
   { code: 'te-IN', name: 'Telugu (India)' },
   { code: 'th-TH', name: 'Thai (Thailand)' },
   { code: 'tr-TR', name: 'Turkish (Turkey)' },
   { code: 'uk-UA', name: 'Ukrainian (Ukraine)' },
-  { code: 'ur-IN', name: 'Urdu (India)' },
   { code: 'ur-PK', name: 'Urdu (Pakistan)' },
   { code: 'uz-UZ', name: 'Uzbek (Uzbekistan)' },
   { code: 'vi-VN', name: 'Vietnamese (Vietnam)' },
   { code: 'zu-ZA', name: 'Zulu (South Africa)' }
 ].sort((a, b) => a.name.localeCompare(b.name));
 
+const VOICES = [
+  { id: VoiceName.KORE, name: 'Kore (Female, Warm)', type: 'Female' },
+  { id: VoiceName.ZEPHYR, name: 'Zephyr (Female, Bright)', type: 'Female' },
+  { id: VoiceName.PUCK, name: 'Puck (Male, Youthful)', type: 'Male' },
+  { id: VoiceName.FENRIR, name: 'Fenrir (Male, Bold)', type: 'Male' },
+  { id: VoiceName.CHARON, name: 'Charon (Male, Deep)', type: 'Male' },
+];
+
 const SessionControls: React.FC<SessionControlsProps> = ({ 
   role, isActive, onToggleRole, onToggleActive, targetLang, onTargetLangChange, 
-  audioSource, onAudioSourceChange, audioLevel = 0
+  audioSource, onAudioSourceChange, voiceName, onVoiceNameChange, audioLevel = 0
 }) => {
   const [isExpanded, setIsExpanded] = React.useState(false);
   const isSpeaker = role === UserRole.SPEAKER;
@@ -192,18 +175,35 @@ const SessionControls: React.FC<SessionControlsProps> = ({
               )}
 
               {isListener && (
-                <div className="flex flex-col items-center animate-in fade-in slide-in-from-bottom-2 duration-300 w-full sm:w-auto">
-                  <label className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] mb-2 text-center">Target Language</label>
-                  <div className="relative group w-full min-w-[240px]">
-                    <Languages className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-indigo-400 group-hover:scale-110 transition-transform" />
-                    <select 
-                      value={targetLang}
-                      onChange={(e) => onTargetLangChange(e.target.value)}
-                      className="bg-slate-800/60 text-xs font-bold border border-white/5 rounded-2xl pl-11 pr-10 py-3 outline-none hover:bg-slate-700 text-slate-100 transition-all appearance-none w-full"
-                    >
-                      {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.name}</option>)}
-                    </select>
-                    <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500 pointer-events-none" />
+                <div className="flex flex-col sm:flex-row items-center gap-4 animate-in fade-in slide-in-from-bottom-2 duration-300 w-full sm:w-auto">
+                  <div className="flex flex-col items-center w-full sm:w-auto">
+                    <label className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] mb-2 text-center">Language</label>
+                    <div className="relative group w-full min-w-[200px]">
+                      <Languages className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-indigo-400 group-hover:scale-110 transition-transform" />
+                      <select 
+                        value={targetLang}
+                        onChange={(e) => onTargetLangChange(e.target.value)}
+                        className="bg-slate-800/60 text-[10px] font-bold border border-white/5 rounded-2xl pl-11 pr-10 py-3 outline-none hover:bg-slate-700 text-slate-100 transition-all appearance-none w-full"
+                      >
+                        {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.name}</option>)}
+                      </select>
+                      <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500 pointer-events-none" />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col items-center w-full sm:w-auto">
+                    <label className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] mb-2 text-center">Voice</label>
+                    <div className="relative group w-full min-w-[180px]">
+                      <UserRound className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-400 group-hover:scale-110 transition-transform" />
+                      <select 
+                        value={voiceName}
+                        onChange={(e) => onVoiceNameChange(e.target.value as VoiceName)}
+                        className="bg-slate-800/60 text-[10px] font-bold border border-white/5 rounded-2xl pl-11 pr-10 py-3 outline-none hover:bg-slate-700 text-slate-100 transition-all appearance-none w-full"
+                      >
+                        {VOICES.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+                      </select>
+                      <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500 pointer-events-none" />
+                    </div>
                   </div>
                 </div>
               )}

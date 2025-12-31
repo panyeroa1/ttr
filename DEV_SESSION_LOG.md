@@ -84,3 +84,59 @@
 
 ### End Timestamp
 **End Timestamp**: 2025-03-04 15:00:00 UTC
+
+---
+
+## Session ID: 20250304-153000
+**Start Timestamp**: 2025-03-04 15:30:00 UTC
+
+### Objective(s)
+1. Fine-tune VAD thresholds for better capture of subtle speech nuances.
+
+### Scope boundaries
+- Logic changes restricted to VAD constants in `services/geminiService.ts`.
+
+### Repo State
+- Thresholds were slightly too high for soft-spoken users, causing cut-offs.
+
+### Files Inspected
+- `services/geminiService.ts`
+
+### Assumptions / Risks
+- Lowering stop threshold to 0.001 might keep the line open too long in noisy environments.
+
+### Summary of Changes
+- **services/geminiService.ts**: Changed `VAD_THRESHOLD_START` to 0.004.
+- **services/geminiService.ts**: Changed `VAD_THRESHOLD_STOP` to 0.001.
+
+### End Timestamp
+**End Timestamp**: 2025-03-04 15:35:00 UTC
+
+---
+
+## Session ID: 20250304-160000
+**Start Timestamp**: 2025-03-04 16:00:00 UTC
+
+### Objective(s)
+1. Implement a more robust sentence segmentation algorithm.
+
+### Scope boundaries
+- `App.tsx`: Refactor `segmentIntoSentences`.
+
+### Repo State
+- Previous logic used a naive regex that split prematurely on common abbreviations like "Mr." or "Dr.".
+
+### Files Inspected
+- `App.tsx`
+
+### Assumptions / Risks
+- Multi-dot abbreviations (e.g., "Ph.D.") might still require specific handling.
+- Fallback for extremely long unpunctuated streams is necessary for UX when model punctuation fails.
+
+### Summary of Changes
+- **App.tsx**: Completely rewrote `segmentIntoSentences`.
+- Added an abbreviation list and logic to skip splitting when a punctuation mark is preceded by a known abbreviation or initial.
+- Refined the "unpunctuated length" fallback to prioritize commas over spaces for better semantic breaks.
+
+### End Timestamp
+**End Timestamp**: 2025-03-04 16:10:00 UTC

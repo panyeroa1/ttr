@@ -21,6 +21,13 @@ export enum TranslationEngine {
   OLLAMA_GEMMA = 'OLLAMA_GEMMA'
 }
 
+export enum TTSEngine {
+  GEMINI = 'GEMINI',
+  ELEVENLABS = 'ELEVENLABS',
+  DEEPGRAM = 'DEEPGRAM',
+  CARTESIA = 'CARTESIA'
+}
+
 export enum VoiceName {
   PUCK = 'Puck',
   CHARON = 'Charon',

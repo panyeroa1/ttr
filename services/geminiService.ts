@@ -49,8 +49,8 @@ export interface LiveSessionCallbacks {
 }
 
 // VAD Constants
-const VAD_THRESHOLD_START = 0.005; // Level required to trigger potential speech
-const VAD_THRESHOLD_STOP = 0.002;  // Level required to keep speech "alive"
+const VAD_THRESHOLD_START = 0.004; // Level required to trigger potential speech
+const VAD_THRESHOLD_STOP = 0.001;  // Level required to keep speech "alive"
 const VAD_HANGOVER_MS = 1200;      // How long to keep sending audio after levels drop
 const VAD_PREROLL_MS = 500;        // Lookahead buffer size
 const MIN_SPEECH_DURATION_MS = 150; // Filter out short transient noises
@@ -424,6 +424,49 @@ Text: "${text}"`,
       });
       return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
     });
+  }
+
+  async generateElevenLabsSpeech(text: string, apiKey: string, voiceId: string = '21m00Tcm4TlvDq8ikWAM') {
+    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'xi-api-key': apiKey },
+      body: JSON.stringify({
+        text,
+        model_id: 'eleven_multilingual_v2',
+        voice_settings: { stability: 0.5, similarity_boost: 0.5 }
+      })
+    });
+    if (!response.ok) throw new Error("ElevenLabs API Error");
+    return await response.arrayBuffer();
+  }
+
+  async generateDeepgramSpeech(text: string, apiKey: string) {
+    const response = await fetch('https://api.deepgram.com/v1/speak?model=aura-asteria-en', {
+      method: 'POST',
+      headers: { 'Authorization': `Token ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text })
+    });
+    if (!response.ok) throw new Error("Deepgram TTS Error");
+    return await response.arrayBuffer();
+  }
+
+  async generateCartesiaSpeech(text: string, apiKey: string, voiceId: string = '79a125e8-cd45-4c13-8a67-01224ca5850b') {
+    const response = await fetch('https://api.cartesia.ai/tts/bytes', {
+      method: 'POST',
+      headers: { 
+        'Cartesia-Key': apiKey, 
+        'Content-Type': 'application/json',
+        'X-API-Version': '2024-06-10'
+      },
+      body: JSON.stringify({
+        model_id: 'sonic-english',
+        transcript: text,
+        voice: { mode: 'id', id: voiceId },
+        output_format: { container: 'wav', sample_rate: 24000, encoding: 'pcm_f32le' }
+      })
+    });
+    if (!response.ok) throw new Error("Cartesia API Error");
+    return await response.arrayBuffer();
   }
 }
 
