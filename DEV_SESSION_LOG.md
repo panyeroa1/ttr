@@ -140,3 +140,47 @@
 
 ### End Timestamp
 **End Timestamp**: 2025-03-04 16:10:00 UTC
+
+---
+
+## Session ID: 20250304-163000
+**Start Timestamp**: 2025-03-04 16:30:00 UTC
+
+### Objective(s)
+1. Fix transcription rendering issues where text wasn't appearing in real-time.
+
+### Scope boundaries
+- `App.tsx`: Refactor `onTranscription` callback and `processTranscriptItem`.
+- `services/geminiService.ts`: Add debug logging.
+
+### Repo State
+- Interim transcription results were being ignored by the UI state, only finalizing sentences visible.
+- Boolean logic for `isFinal` was flawed (using `||` which coerced `false` to `true`).
+
+### Summary of Changes
+- **App.tsx**: Modified speaker `onTranscription` to call `processTranscriptItem` for every chunk.
+- **App.tsx**: Fixed `isFinal` logic using `??` to correctly preserve false interim states.
+- **services/geminiService.ts**: Added debug logs for session events.
+
+### End Timestamp
+**End Timestamp**: 2025-03-04 16:40:00 UTC
+
+---
+
+## Session ID: 20250304-170000
+**Start Timestamp**: 2025-03-04 17:00:00 UTC
+
+### Objective(s)
+1. Expand the available languages and dialects for translation selection.
+
+### Scope boundaries
+- `components/SessionControls.tsx`: Update `LANGUAGES` array.
+
+### Repo State
+- The `LANGUAGES` list was limited to a few common options.
+
+### Summary of Changes
+- **components/SessionControls.tsx**: Added over 100 languages and regional dialects to the `LANGUAGES` array, including variations for Arabic, English, Spanish, French, and German.
+
+### End Timestamp
+**End Timestamp**: 2025-03-04 17:05:00 UTC

@@ -219,10 +219,11 @@ const App: React.FC = () => {
       const idx = prev.findIndex(t => t.id === item.id);
       if (idx > -1) {
         const updated = [...prev];
-        updated[idx] = { ...updated[idx], text: item.text, isFinal: item.isFinal || true, speaker: speakerName };
+        // FIX: Use nullish coalescing so that false is preserved correctly
+        updated[idx] = { ...updated[idx], text: item.text, isFinal: item.isFinal ?? true, speaker: speakerName };
         return updated;
       }
-      return [...prev, { id: item.id, text: item.text, isFinal: item.isFinal || true, speaker: speakerName }];
+      return [...prev, { id: item.id, text: item.text, isFinal: item.isFinal ?? true, speaker: speakerName }];
     });
 
     const lastOffset = processedTextOffsetRef.current.get(item.id) || 0;
@@ -411,7 +412,13 @@ const App: React.FC = () => {
                 const senderName = speaker || displayName;
                 setCurrentSubtitle({ text, isFinal });
                 syncToDatabase(text, isFinal, senderName);
-                if (isFinal) processTranscriptItem({ id: uid, text, sender: senderName, isFinal: true }, false);
+                
+                // FIX: Call processTranscriptItem for interim results too so they appear in the UI list immediately
+                processTranscriptItem({ id: uid, text, sender: senderName, isFinal: isFinal }, false);
+                
+                if (isFinal) {
+                  // Utterance finalized, syncToDatabase already handled the unique ID reset via side effect in its internal performSync
+                }
               },
               onStatusChange: setSessionStatus,
               onError: (e) => setLastError(e.message)
@@ -444,7 +451,7 @@ const App: React.FC = () => {
               const isFinal = e.results[e.results.length - 1].isFinal;
               setCurrentSubtitle({ text, isFinal });
               syncToDatabase(text, isFinal, displayName);
-              if (isFinal) processTranscriptItem({ id: currentUtteranceIdRef.current, text, sender: displayName, isFinal: true }, false);
+              processTranscriptItem({ id: currentUtteranceIdRef.current, text, sender: displayName, isFinal: isFinal }, false);
             };
             recognition.onerror = (e: any) => setLastError(e.error);
             recognition.start();
@@ -470,6 +477,8 @@ const App: React.FC = () => {
                 if (data.is_final) {
                   syncToDatabase(transcript, true, displayName);
                   processTranscriptItem({ id: currentUtteranceIdRef.current, text: transcript, sender: displayName, isFinal: true }, false);
+                } else {
+                  processTranscriptItem({ id: currentUtteranceIdRef.current, text: transcript, sender: displayName, isFinal: false }, false);
                 }
               }
             };

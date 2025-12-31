@@ -207,6 +207,7 @@ export class LiveSessionManager {
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
         callbacks: {
           onopen: () => {
+            console.debug('Live Session Opened');
             this.setStatus('connected');
             this.retryCount = 0;
           },
@@ -230,6 +231,7 @@ export class LiveSessionManager {
             }
             
             if (message.serverContent?.turnComplete) {
+              console.debug('Turn Complete:', this.currentTranscription);
               if (this.currentTranscription.trim()) {
                 const tagRegex = /\[(Speaker \d+)\]:\s*(.*)/gi;
                 let lastMatch;
@@ -252,10 +254,14 @@ export class LiveSessionManager {
             }
           },
           onerror: (e) => {
+            console.error('Live Session Error:', e);
             this.handleDisconnect();
             this.callbacks.onError?.(e);
           },
-          onclose: (e) => this.handleDisconnect(),
+          onclose: (e) => {
+            console.debug('Live Session Closed');
+            this.handleDisconnect();
+          },
         },
         config: {
           responseModalities: [Modality.AUDIO],
@@ -278,6 +284,7 @@ export class LiveSessionManager {
         }
       });
     } catch (err: any) {
+      console.error('Connection Exception:', err);
       this.handleDisconnect();
     }
   }
