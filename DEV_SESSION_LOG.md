@@ -1,4 +1,3 @@
-
 # DEV SESSION LOG
 
 ## Session ID: 20240521-140000
@@ -13,24 +12,44 @@
 - `lib/supabase.ts` (API logic).
 - `App.tsx` (ID management and sync frequency).
 
-### Files Inspected
-- `lib/supabase.ts`
-- `App.tsx`
-
-### Assumptions / Risks
-- Using `crypto.randomUUID()` for utterance tracking assumes the client is the orchestrator of row IDs.
-- High-frequency upserts during streaming might hit Supabase rate limits if the user speaks without pausing for long periods; implemented basic flow to handle this via stable ID references.
-
 ### End Timestamp
 **End Timestamp**: 2024-05-21 14:15:00 UTC
 
 ### Summary of Changes
 - Modified `saveTranscript` and `saveTranslation` in `lib/supabase.ts` to use `.upsert()` with `onConflict: 'id'`.
 - Updated `App.tsx` to maintain `currentUtteranceIdRef` and `currentTranslationIdRef`.
-- Changed transcription handler to call `syncToDatabase` on every message (including partials), ensuring the DB row updates in real-time.
-- Ensured translation rows also update in place by linking them to the stable utterance ID.
+
+---
+
+## Session ID: 20240521-143000
+**Start Timestamp**: 2024-05-21 14:30:00 UTC
+
+### Objective(s)
+1. Decouple Listener UI from local Speaker state.
+2. Implement Supabase Real-time subscriptions for transcription and translation tables.
+3. Trigger TTS purely from incoming DB translation events for Listeners.
+
+### Repo State
+- DB schema with `transcriptions` and `translations` tables ready.
+- Speaker logic functional.
+
+### Files Inspected
+- `App.tsx`
+- `lib/supabase.ts`
+
+### Assumptions / Risks
+- Real-time subscription latency might be slightly higher than local propagation, but provides the required "Source of Truth" architecture.
+- Filter `target_lang` in Postgres changes subscription ensures listeners only receive their preferred language.
+
+### Summary of Changes
+- Added `useEffect` in `App.tsx` to handle `postgres_changes` via Supabase Real-time.
+- Moved TTS execution for listeners into the DB event handler.
+- Speaker now pushes to DB, and listeners automatically reflect those changes.
+- Added a "LIVE SYNC" and "SUBSCRIBED" indicator for Listeners.
 
 ### Files Changed
-- `lib/supabase.ts`
 - `App.tsx`
 - `DEV_SESSION_LOG.md`
+
+### End Timestamp
+**End Timestamp**: 2024-05-21 14:45:00 UTC

@@ -4,7 +4,7 @@ import { gemini, encode, decode, decodeAudioData, SessionStatus } from './servic
 import { supabase, saveTranscript, saveTranslation } from './lib/supabase';
 import SessionControls from './components/SessionControls';
 import LiveCaptions from './components/LiveCaptions';
-import { Sparkles, Activity, Database, AlertCircle, X, Copy, CheckCircle2, Wifi, RefreshCw } from 'lucide-react';
+import { Sparkles, Activity, Database, AlertCircle, X, Wifi, RefreshCw, CloudLightning } from 'lucide-react';
 
 // VAD Constants
 const SILENCE_THRESHOLD_RMS = 0.005; 
@@ -22,7 +22,6 @@ const App: React.FC = () => {
   const [dbStatus, setDbStatus] = useState<'connected' | 'error' | 'authenticating'>('authenticating');
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>('disconnected');
   const [lastError, setLastError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   
   const audioContextRef = useRef<AudioContext | null>(null);
   const outputAudioContextRef = useRef<AudioContext | null>(null);
@@ -33,6 +32,7 @@ const App: React.FC = () => {
   const currentUtteranceIdRef = useRef<string>(crypto.randomUUID());
   const syncTimeoutRef = useRef<number | null>(null);
 
+  // Initialize Auth
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -56,6 +56,7 @@ const App: React.FC = () => {
     initAuth();
   }, []);
 
+  // Initialize Audio Contexts
   useEffect(() => {
     audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
     outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
@@ -65,8 +66,83 @@ const App: React.FC = () => {
     };
   }, []);
 
+  // Real-time Supabase Subscription for Listeners
+  useEffect(() => {
+    if (!isActive || role !== UserRole.LISTENER) return;
+
+    console.log("Subscribing to Supabase Real-time for language:", targetLang);
+
+    const transcriptChannel = supabase
+      .channel('public:transcriptions')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transcriptions' }, (payload) => {
+        const item = payload.new as any;
+        setTranscripts(prev => {
+          const idx = prev.findIndex(t => t.id === item.id);
+          if (idx > -1) {
+            const updated = [...prev];
+            updated[idx] = { ...updated[idx], text: item.text, isFinal: true };
+            return updated;
+          }
+          return [...prev, { id: item.id, text: item.text, isFinal: true, speaker: item.sender }];
+        });
+      })
+      .subscribe();
+
+    const translationChannel = supabase
+      .channel('public:translations')
+      .on('postgres_changes', 
+        { 
+          event: '*', 
+          schema: 'public', 
+          table: 'translations',
+          filter: `target_lang=eq.${targetLang}`
+        }, 
+        async (payload) => {
+          const item = payload.new as any;
+          if (!item.translated_text) return;
+
+          setTranslations(prev => {
+            const idx = prev.findIndex(t => t.id === item.id);
+            if (idx > -1) return prev;
+            return [...prev, { 
+              id: item.id, 
+              transcriptId: item.transcript_id || '', 
+              text: item.translated_text, 
+              lang: item.target_lang.toUpperCase() 
+            }];
+          });
+
+          // Trigger TTS for Listener
+          if (outputAudioContextRef.current) {
+            try {
+              const audioData = await gemini.generateSpeech(item.translated_text);
+              if (audioData) {
+                const ctx = outputAudioContextRef.current;
+                nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
+                const buffer = await decodeAudioData(decode(audioData), ctx, 24000, 1);
+                const source = ctx.createBufferSource();
+                source.buffer = buffer;
+                source.connect(ctx.destination);
+                source.start(nextStartTimeRef.current);
+                nextStartTimeRef.current += buffer.duration;
+              }
+            } catch (e) {
+              console.error("TTS Error:", e);
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(transcriptChannel);
+      supabase.removeChannel(translationChannel);
+    };
+  }, [isActive, role, targetLang]);
+
+  // DB Sync Logic (Speaker side)
   const syncToDatabase = useCallback(async (text: string, isFinal: boolean) => {
-    if (!text.trim() || !currentUserId) return;
+    if (!text.trim() || !currentUserId || role !== UserRole.SPEAKER) return;
     const utteranceId = currentUtteranceIdRef.current;
 
     const performSync = async () => {
@@ -76,27 +152,16 @@ const App: React.FC = () => {
         });
 
         if (isFinal) {
+          // Speaker generates translation to store it for everyone
           const translated = await gemini.translate(text, 'English', targetLang);
           const transId = crypto.randomUUID();
           await saveTranslation({
             id: transId, user_id: currentUserId, source_lang: 'English', target_lang: targetLang, original_text: text, translated_text: translated
           });
 
+          // Speaker updates their own view locally for immediate feedback
           setTranslations(prev => [...prev, { id: transId, transcriptId: utteranceId, text: translated, lang: targetLang.toUpperCase() }]);
-
-          if (role === UserRole.LISTENER) {
-            const audioData = await gemini.generateSpeech(translated);
-            if (audioData && outputAudioContextRef.current) {
-              const ctx = outputAudioContextRef.current;
-              nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
-              const buffer = await decodeAudioData(decode(audioData), ctx, 24000, 1);
-              const source = ctx.createBufferSource();
-              source.buffer = buffer;
-              source.connect(ctx.destination);
-              source.start(nextStartTimeRef.current);
-              nextStartTimeRef.current += buffer.duration;
-            }
-          }
+          
           currentUtteranceIdRef.current = crypto.randomUUID();
         }
       } catch (e: any) {
@@ -118,6 +183,8 @@ const App: React.FC = () => {
       streamRef.current?.getTracks().forEach(t => t.stop());
       sessionManagerRef.current?.close();
       setAudioLevel(0);
+      setTranscripts([]);
+      setTranslations([]);
     } else {
       if (role === UserRole.IDLE) return;
       try {
@@ -127,19 +194,23 @@ const App: React.FC = () => {
           streamRef.current = stream;
         }
         setIsActive(true);
+        
         const manager = await gemini.connectLive({
           onTranscription: (text, isFinal) => {
-            const uid = currentUtteranceIdRef.current;
-            setTranscripts(prev => {
-              const idx = prev.findIndex(t => t.id === uid);
-              if (idx > -1) {
-                const updated = [...prev];
-                updated[idx] = { ...updated[idx], text, isFinal };
-                return updated;
-              }
-              return [...prev, { id: uid, text, isFinal, speaker: 'SOURCE' }];
-            });
-            syncToDatabase(text, isFinal);
+            // Speaker handles local state update and DB push
+            if (role === UserRole.SPEAKER) {
+              const uid = currentUtteranceIdRef.current;
+              setTranscripts(prev => {
+                const idx = prev.findIndex(t => t.id === uid);
+                if (idx > -1) {
+                  const updated = [...prev];
+                  updated[idx] = { ...updated[idx], text, isFinal };
+                  return updated;
+                }
+                return [...prev, { id: uid, text, isFinal, speaker: 'SOURCE' }];
+              });
+              syncToDatabase(text, isFinal);
+            }
           },
           onStatusChange: setSessionStatus
         });
@@ -203,7 +274,13 @@ const App: React.FC = () => {
           </div>
           <div className="flex items-center gap-2">
             <StatusBadge status={sessionStatus} icon={sessionStatus === 'connected' ? Wifi : RefreshCw} label={sessionStatus.toUpperCase()} active={sessionStatus === 'connected'} />
-            <StatusBadge status={dbStatus} icon={Database} label={dbStatus === 'error' ? 'RLS ERR' : 'DB SYNC'} active={dbStatus === 'connected'} error={dbStatus === 'error'} />
+            <StatusBadge status={dbStatus} icon={Database} label={role === UserRole.LISTENER ? 'LIVE SYNC' : 'DB SYNC'} active={dbStatus === 'connected'} error={dbStatus === 'error'} />
+            {role === UserRole.LISTENER && isActive && (
+               <div className="flex items-center gap-2 px-3 py-1 rounded-lg border border-indigo-500/20 text-indigo-400 bg-indigo-500/5 text-[10px] font-black tracking-widest">
+                 <CloudLightning className="w-3.5 h-3.5 animate-pulse" />
+                 <span>SUBSCRIBED</span>
+               </div>
+            )}
           </div>
         </div>
       </header>
