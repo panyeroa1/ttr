@@ -1,36 +1,36 @@
 
 # DEV SESSION LOG
 
-## Session ID: 20240521-110000
-**Start Timestamp**: 2024-05-21 11:00:00 UTC
-... (previous summary)
-
-## Session ID: 20240521-120000
-**Start Timestamp**: 2024-05-21 12:00:00 UTC
+## Session ID: 20240521-140000
+**Start Timestamp**: 2024-05-21 14:00:00 UTC
 
 ### Objective(s)
-1. Simplify RLS resolution for the user.
-2. Add "Copy SQL Fix" functionality to the UI alert.
-3. Enhance error messaging to specifically identify RLS vs other DB errors.
+1. Transition from .insert() to .upsert() in Supabase logic.
+2. Enable real-time row updates for transcription partials.
+3. Ensure translations also update existing rows rather than creating new ones.
 
 ### Scope Boundaries
-- `App.tsx` (UI components only).
+- `lib/supabase.ts` (API logic).
+- `App.tsx` (ID management and sync frequency).
 
 ### Files Inspected
+- `lib/supabase.ts`
 - `App.tsx`
 
 ### Assumptions / Risks
-- The user will see the alert and understand they need to run the SQL in their Supabase dashboard.
+- Using `crypto.randomUUID()` for utterance tracking assumes the client is the orchestrator of row IDs.
+- High-frequency upserts during streaming might hit Supabase rate limits if the user speaks without pausing for long periods; implemented basic flow to handle this via stable ID references.
 
 ### End Timestamp
-**End Timestamp**: 2024-05-21 12:10:00 UTC
+**End Timestamp**: 2024-05-21 14:15:00 UTC
 
 ### Summary of Changes
-- Added a `SQL_FIX` constant containing the necessary Supabase commands.
-- Implemented a `Copy SQL Fix` button in the `App.tsx` error alert.
-- Improved the visual design of the error alert for higher visibility.
-- Updated the Database Status header button to be interactive when in error state.
+- Modified `saveTranscript` and `saveTranslation` in `lib/supabase.ts` to use `.upsert()` with `onConflict: 'id'`.
+- Updated `App.tsx` to maintain `currentUtteranceIdRef` and `currentTranslationIdRef`.
+- Changed transcription handler to call `syncToDatabase` on every message (including partials), ensuring the DB row updates in real-time.
+- Ensured translation rows also update in place by linking them to the stable utterance ID.
 
 ### Files Changed
+- `lib/supabase.ts`
 - `App.tsx`
 - `DEV_SESSION_LOG.md`

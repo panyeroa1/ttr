@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Modality, LiveServerMessage } from "@google/genai";
 
 /**
@@ -48,107 +47,166 @@ export async function decodeAudioData(
   return buffer;
 }
 
-export class GeminiService {
-  // Use a getter to ensure a new instance is created right before making an API call
-  private get ai() {
-    return new GoogleGenAI({ apiKey: process.env.API_KEY });
+export type SessionStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'error';
+
+export interface LiveSessionCallbacks {
+  onTranscription: (text: string, isFinal: boolean) => void;
+  onStatusChange?: (status: SessionStatus) => void;
+  onInterrupted?: () => void;
+  onError?: (e: any) => void;
+}
+
+export class LiveSessionManager {
+  private ai: GoogleGenAI;
+  private callbacks: LiveSessionCallbacks;
+  private currentSession: any = null;
+  private status: SessionStatus = 'disconnected';
+  private retryCount = 0;
+  private maxRetries = 5;
+  private isExplicitlyClosed = false;
+  private currentTranscription = '';
+
+  constructor(apiKey: string, callbacks: LiveSessionCallbacks) {
+    this.ai = new GoogleGenAI({ apiKey });
+    this.callbacks = callbacks;
   }
 
-  /**
-   * Connect to Gemini Live for STT
-   */
-  async connectLive(callbacks: {
-    onTranscription: (text: string, isFinal: boolean) => void;
-    onInterrupted?: () => void;
-    onError?: (e: any) => void;
-  }) {
-    let currentTranscription = '';
-    
-    const sessionPromise = this.ai.live.connect({
-      model: 'gemini-2.5-flash-native-audio-preview-09-2025',
-      callbacks: {
-        onopen: () => console.log('Gemini Live session opened'),
-        onmessage: async (message: LiveServerMessage) => {
-          if (message.serverContent?.inputTranscription) {
-            const text = message.serverContent.inputTranscription.text;
-            currentTranscription += text;
-            callbacks.onTranscription(currentTranscription, false);
-          }
-          
-          if (message.serverContent?.turnComplete) {
-            // Only fire final if we actually have text
-            if (currentTranscription.trim()) {
-              callbacks.onTranscription(currentTranscription, true);
+  private setStatus(status: SessionStatus) {
+    this.status = status;
+    this.callbacks.onStatusChange?.(status);
+  }
+
+  async connect() {
+    this.isExplicitlyClosed = false;
+    this.retryCount = 0;
+    return this.internalConnect();
+  }
+
+  private async internalConnect() {
+    if (this.isExplicitlyClosed) return;
+
+    this.setStatus(this.retryCount > 0 ? 'reconnecting' : 'connecting');
+
+    try {
+      this.currentSession = await this.ai.live.connect({
+        model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+        callbacks: {
+          onopen: () => {
+            console.log('Gemini Live session opened');
+            this.setStatus('connected');
+            this.retryCount = 0;
+          },
+          onmessage: async (message: LiveServerMessage) => {
+            if (message.serverContent?.inputTranscription) {
+              const text = message.serverContent.inputTranscription.text;
+              this.currentTranscription += text;
+              this.callbacks.onTranscription(this.currentTranscription, false);
             }
-            currentTranscription = '';
-          }
+            
+            if (message.serverContent?.turnComplete) {
+              if (this.currentTranscription.trim()) {
+                this.callbacks.onTranscription(this.currentTranscription, true);
+              }
+              this.currentTranscription = '';
+            }
+            
+            if (message.serverContent?.interrupted) {
+              this.callbacks.onInterrupted?.();
+            }
+          },
+          onerror: (e) => {
+            console.error('Gemini Live error:', e);
+            this.callbacks.onError?.(e);
+            this.handleDisconnect();
+          },
+          onclose: (e) => {
+            console.log('Gemini Live session closed', e);
+            this.handleDisconnect();
+          },
+        },
+        config: {
+          responseModalities: [Modality.AUDIO],
+          inputAudioTranscription: {},
+          systemInstruction: `You are a high-performance real-time transcription agent.
           
-          if (message.serverContent?.interrupted) {
-            callbacks.onInterrupted?.();
-          }
-        },
-        onerror: (e) => callbacks.onError?.(e),
-        onclose: () => {
-          console.log('Gemini Live session closed');
-          // If we had a pending transcription, send it before closing
-          if (currentTranscription.trim()) {
-             callbacks.onTranscription(currentTranscription, true);
-          }
-        },
-      },
-      config: {
-        responseModalities: [Modality.AUDIO],
-        inputAudioTranscription: {},
-        systemInstruction: `You are a high-precision real-time transcription agent. 
-        RULES:
-        1. Transcribe audio exactly as spoken.
-        2. Use natural sentence boundaries.
-        3. Signal turn completion (turnComplete) immediately after a clear pause in speech (approx 1.5 seconds).
-        4. Focus exclusively on transcription. Do not respond to the user.
-        5. If you hear multiple people, attempt to distinguish them with 'Speaker:' tags if possible, otherwise provide a continuous stream.`,
-      }
-    });
-
-    return sessionPromise;
+          RULES:
+          1. TRANSCRIBE exactly what is heard.
+          2. SEGMENTATION: Trigger 'turnComplete' after exactly 1.0 seconds of silence.
+          3. PUNCTUATION: Use precise semantic punctuation (periods, commas, question marks).
+          4. NO META-TALK: Never respond to the user. Only transcribe.
+          5. NO DELAY: Stream transcription immediately.`,
+        }
+      });
+    } catch (err) {
+      console.error('Failed to establish connection:', err);
+      this.handleDisconnect();
+    }
   }
 
-  /**
-   * Translate text using standard Gemini text model
-   */
+  private handleDisconnect() {
+    if (this.isExplicitlyClosed) {
+      this.setStatus('disconnected');
+      return;
+    }
+
+    if (this.retryCount < this.maxRetries) {
+      this.retryCount++;
+      const delay = Math.min(1000 * Math.pow(2, this.retryCount), 10000);
+      this.setStatus('reconnecting');
+      setTimeout(() => this.internalConnect(), delay);
+    } else {
+      this.setStatus('error');
+      this.callbacks.onError?.(new Error('Persistent connection failure'));
+    }
+  }
+
+  sendRealtimeInput(input: any) {
+    if (this.status === 'connected' && this.currentSession) {
+      this.currentSession.sendRealtimeInput(input);
+    }
+  }
+
+  close() {
+    this.isExplicitlyClosed = true;
+    if (this.currentSession) {
+      this.currentSession = null;
+    }
+    this.setStatus('disconnected');
+  }
+}
+
+export class GeminiService {
+  async connectLive(callbacks: LiveSessionCallbacks) {
+    const apiKey = process.env.API_KEY;
+    if (!apiKey) throw new Error('API Key missing');
+    const manager = new LiveSessionManager(apiKey, callbacks);
+    await manager.connect();
+    return manager;
+  }
+
   async translate(text: string, sourceLang: string, targetLang: string) {
-    const response = await this.ai.models.generateContent({
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: `Translate the following text from ${sourceLang} to ${targetLang}. 
-      Only return the translation, no extra commentary. 
-      Maintain the original tone and regional dialect nuances of ${targetLang}.
-      
-      Text: ${text}`,
-      config: {
-        temperature: 0.1,
-      }
+      contents: `Translate to ${targetLang}: "${text}". Only the translation.`,
+      config: { temperature: 0.1 }
     });
     return response.text?.trim() || "";
   }
 
-  /**
-   * Generate TTS audio for translated text
-   */
   async generateSpeech(text: string, targetVoice: string = 'Kore') {
-    const response = await this.ai.models.generateContent({
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-preview-tts",
       contents: [{ parts: [{ text: text }] }],
       config: {
         responseModalities: [Modality.AUDIO],
         speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: targetVoice },
-          },
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: targetVoice } },
         },
       },
     });
-
-    const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    return base64Audio;
+    return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
   }
 }
 
