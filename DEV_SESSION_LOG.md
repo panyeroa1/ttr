@@ -53,3 +53,34 @@
 
 ### End Timestamp
 **End Timestamp**: 2025-03-04 12:35:00 UTC
+
+---
+
+## Session ID: 20250304-144500
+**Start Timestamp**: 2025-03-04 14:45:00 UTC
+
+### Objective(s)
+1. Enhance VAD robustness with hysteresis and noise filtering.
+2. Implement seamless lookahead (preroll) and lookbehind (hangover) delivery.
+
+### Scope boundaries
+- Logic changes restricted to `LiveSessionManager` class in `services/geminiService.ts`.
+
+### Repo State
+- Single threshold VAD was prone to "flickering" near threshold levels and triggering on short non-speech sounds.
+
+### Files Inspected
+- `services/geminiService.ts`
+
+### Assumptions / Risks
+- `MIN_SPEECH_DURATION_MS` might cause slight initial delay, mitigated by the `preRollBuffer` flush.
+- Threshold values (`0.005` start, `0.002` stop) are balanced for typical laptop mics.
+
+### Summary of Changes
+- **services/geminiService.ts**: Replaced single `VAD_THRESHOLD` with `VAD_THRESHOLD_START` and `VAD_THRESHOLD_STOP`.
+- **services/geminiService.ts**: Added `MIN_SPEECH_DURATION_MS` filter (150ms).
+- **services/geminiService.ts**: Refined state machine in `processAudio` to use `potentialSpeechStartTime`.
+- **services/geminiService.ts**: Increased `VAD_PREROLL_MS` to 500ms for better leading context.
+
+### End Timestamp
+**End Timestamp**: 2025-03-04 15:00:00 UTC

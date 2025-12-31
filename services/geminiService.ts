@@ -48,9 +48,12 @@ export interface LiveSessionCallbacks {
   onError?: (e: any) => void;
 }
 
-const VAD_THRESHOLD = 0.003;
-const VAD_HANGOVER_MS = 1500;
-const VAD_PREROLL_MS = 400;
+// VAD Constants
+const VAD_THRESHOLD_START = 0.005; // Level required to trigger potential speech
+const VAD_THRESHOLD_STOP = 0.002;  // Level required to keep speech "alive"
+const VAD_HANGOVER_MS = 1200;      // How long to keep sending audio after levels drop
+const VAD_PREROLL_MS = 500;        // Lookahead buffer size
+const MIN_SPEECH_DURATION_MS = 150; // Filter out short transient noises
 
 /**
  * Tracks if we have hit a hard daily limit.
@@ -91,8 +94,6 @@ class RequestQueue {
 
     while (this.queue.length > 0) {
       if (dailyQuotaExceeded) {
-        // Clear queue if daily quota is reached
-        this.queue.forEach(q => {}); // No-op
         this.queue = [];
         break;
       }
@@ -121,7 +122,6 @@ class RequestQueue {
       const errorMessage = error?.message || "";
       const is429 = errorMessage.includes('429') || error?.status === 429 || error?.name === 'RESOURCE_EXHAUSTED';
       
-      // Specific detection for Daily Quota vs Rate Limit
       const isDailyLimit = errorStr.includes('DailyRequestsPerDay') || errorStr.includes('quotaValue":"20"') || errorMessage.includes('daily limit');
 
       if (isDailyLimit) {
@@ -166,7 +166,9 @@ export class LiveSessionManager {
   private currentTranscription = '';
   private userName: string = 'Speaker';
 
+  // VAD Internal State
   private isSpeaking = false;
+  private potentialSpeechStartTime = 0;
   private lastSpeechTime = 0;
   private preRollBuffer: Uint8Array[] = [];
   private readonly sampleRate = 16000;
@@ -298,30 +300,61 @@ export class LiveSessionManager {
 
   processAudio(data: Float32Array) {
     if (this.status !== 'connected' || !this.currentSession) return;
-    let rms = 0;
-    for (let i = 0; i < data.length; i++) rms += data[i] * data[i];
-    const currentLevel = Math.sqrt(rms / data.length);
+    
+    // Calculate RMS for current frame
+    let sumSquares = 0;
+    for (let i = 0; i < data.length; i++) sumSquares += data[i] * data[i];
+    const currentLevel = Math.sqrt(sumSquares / data.length);
+    
+    // Convert to PCM16
     const int16 = new Int16Array(data.length);
     for (let i = 0; i < data.length; i++) int16[i] = data[i] * 32768;
     const pcmBytes = new Uint8Array(int16.buffer);
+    
     const now = Date.now();
 
-    if (currentLevel > VAD_THRESHOLD) {
-      this.lastSpeechTime = now;
+    // VAD Logic State Machine
+    if (currentLevel > VAD_THRESHOLD_START) {
+      // Noise detected
       if (!this.isSpeaking) {
-        this.isSpeaking = true;
-        this.preRollBuffer.forEach(chunk => this.sendToModel(chunk));
-        this.preRollBuffer = [];
-      }
-      this.sendToModel(pcmBytes);
-    } else {
-      if (this.isSpeaking) {
-        if (now - this.lastSpeechTime < VAD_HANGOVER_MS) {
+        if (this.potentialSpeechStartTime === 0) {
+          // Track start of potential speech
+          this.potentialSpeechStartTime = now;
+        } else if (now - this.potentialSpeechStartTime > MIN_SPEECH_DURATION_MS) {
+          // Confirmed speech
+          this.isSpeaking = true;
+          this.potentialSpeechStartTime = 0;
+          // Flush preroll buffer to provide context
+          this.preRollBuffer.forEach(chunk => this.sendToModel(chunk));
+          this.preRollBuffer = [];
           this.sendToModel(pcmBytes);
         } else {
+          // Still in potential speech window - buffer it
+          this.preRollBuffer.push(pcmBytes);
+        }
+      } else {
+        // Already speaking
+        this.sendToModel(pcmBytes);
+      }
+      this.lastSpeechTime = now;
+    } else if (currentLevel > VAD_THRESHOLD_STOP && this.isSpeaking) {
+      // Lower threshold for maintaining speech
+      this.sendToModel(pcmBytes);
+      this.lastSpeechTime = now;
+    } else {
+      // Silence detected
+      this.potentialSpeechStartTime = 0;
+      
+      if (this.isSpeaking) {
+        if (now - this.lastSpeechTime < VAD_HANGOVER_MS) {
+          // In hangover period (postroll)
+          this.sendToModel(pcmBytes);
+        } else {
+          // Hangover ended
           this.isSpeaking = false;
         }
       } else {
+        // Just ambient silence - keep preroll buffer fresh
         this.preRollBuffer.push(pcmBytes);
         const maxPreRollFrames = (VAD_PREROLL_MS / 1000) * (this.sampleRate / data.length);
         if (this.preRollBuffer.length > maxPreRollFrames) {
@@ -351,6 +384,7 @@ export class LiveSessionManager {
     this.setStatus('disconnected');
     this.preRollBuffer = [];
     this.isSpeaking = false;
+    this.potentialSpeechStartTime = 0;
   }
 }
 
@@ -365,7 +399,6 @@ export class GeminiService {
     return apiQueue.add(async () => {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const response = await ai.models.generateContent({
-        // Switched to gemini-flash-latest as it often has higher default quotas than gemini-3 previews
         model: 'gemini-flash-latest',
         contents: `Translate the following text to ${targetLang}. Preserve the original tone and context. Only return the translated text without extra formatting or comments.
         

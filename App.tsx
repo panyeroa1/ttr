@@ -191,10 +191,7 @@ const App: React.FC = () => {
       setCurrentSubtitle({ text: newContent.trim(), isFinal: item.isFinal });
     }
 
-    // "transcribe in segment realtime and save thats the only task needed in the Speak tab"
-    // Translation and TTS are strictly for listeners.
     if (role !== UserRole.LISTENER) return;
-    
     if (isRateLimited || isDailyQuotaReached()) return;
 
     const { sentences, lastIndex } = segmentIntoSentences(newContent, item.isFinal);
@@ -423,7 +420,7 @@ const App: React.FC = () => {
   }, [isActive, role, audioSource, displayName, syncToDatabase, processTranscriptItem, sttProvider, deepgramKey]);
 
   return (
-    <div className="min-h-[100dvh] flex flex-col bg-slate-950 text-slate-100 overflow-x-hidden relative font-inter">
+    <div className="min-h-[100dvh] h-[100dvh] flex flex-col bg-slate-950 text-slate-100 overflow-hidden relative font-inter">
       {isActive && showSubtitles && currentTab === 'live' && (currentSubtitle.text || role === UserRole.LISTENER) && (
         <SubtitlesOverlay 
           text={role === UserRole.SPEAKER ? currentSubtitle.text : (translations.length > 0 ? translations[translations.length - 1].text : '')} 
@@ -484,105 +481,102 @@ const App: React.FC = () => {
 
       <main className="flex-1 w-full max-w-[1920px] mx-auto px-2 md:px-8 py-4 md:py-8 overflow-hidden flex flex-col items-center">
         {currentTab === 'live' ? (
-          <div className={`w-full h-full grid gap-3 md:gap-4 min-h-[calc(100vh-320px)] md:min-h-[calc(100vh-280px)] ${
-            role === UserRole.SPEAKER ? 'grid-cols-1 max-w-5xl place-items-center' : 'grid-cols-1 md:grid-cols-2'
+          <div className={`w-full h-full grid gap-3 md:gap-4 ${
+            role === UserRole.SPEAKER ? 'grid-cols-1 max-w-5xl' : 'grid-cols-1 md:grid-cols-2'
           }`}>
-            <div className="flex w-full h-full animate-in fade-in duration-700">
+            <div className="flex w-full h-full animate-in fade-in duration-700 overflow-hidden">
               <LiveCaptions title={role === UserRole.SPEAKER ? "My Transcription (Broadcasting)" : "Original Transcription"} transcripts={transcripts} translations={[]} type="source" />
             </div>
             {role === UserRole.LISTENER && (
-              <div className="flex w-full h-full animate-in slide-in-from-right duration-700">
+              <div className="flex w-full h-full animate-in slide-in-from-right duration-700 overflow-hidden">
                 <LiveCaptions title="My Translation (Read Aloud)" transcripts={[]} translations={translations} type="target" />
               </div>
             )}
           </div>
         ) : (
-          <div className="w-full max-w-4xl h-full animate-in zoom-in-95 duration-500 bg-slate-900/40 backdrop-blur-xl rounded-[2.5rem] border border-white/10 p-6 md:p-12 overflow-y-auto scrollbar-hide">
-            <div className="flex items-center gap-4 mb-10">
-              <div className="p-3 bg-indigo-600 rounded-2xl">
-                <SlidersHorizontal className="w-6 h-6 text-white" />
-              </div>
-              <div>
-                <h2 className="text-2xl font-black uppercase tracking-widest">Configuration</h2>
-                <p className="text-xs text-slate-500 font-bold uppercase tracking-widest mt-1">Fine-tune your realtime pipeline</p>
+          <div className="w-full max-w-4xl h-full animate-in zoom-in-95 duration-500 bg-slate-900/40 backdrop-blur-xl rounded-[2.5rem] border border-white/10 overflow-hidden flex flex-col">
+            <div className="p-6 md:p-12 pb-4 shrink-0">
+              <div className="flex items-center gap-4 mb-2">
+                <div className="p-3 bg-indigo-600 rounded-2xl">
+                  <SlidersHorizontal className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-black uppercase tracking-widest">Configuration</h2>
+                  <p className="text-xs text-slate-500 font-bold uppercase tracking-widest mt-1">Fine-tune your realtime pipeline</p>
+                </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-12">
-              <SettingsSection icon={Mic2} title="Speech-to-Text (STT)" description="Choose your transcription engine">
-                <div className="grid grid-cols-1 gap-3">
-                  <SettingBtn active={sttProvider === STTEngine.GEMINI} onClick={() => setSttProvider(STTEngine.GEMINI)} icon={Sparkles} label="Gemini Live" description="Best for natural context" />
-                  <SettingBtn active={sttProvider === STTEngine.DEEPGRAM} onClick={() => setSttProvider(STTEngine.DEEPGRAM)} icon={Server} label="Deepgram" description="Ultra low latency" />
-                  <SettingBtn active={sttProvider === STTEngine.WEBSPEECH} onClick={() => setSttProvider(STTEngine.WEBSPEECH)} icon={Globe} label="WebSpeech" description="Privacy-first, browser native" />
-                </div>
-                {sttProvider === STTEngine.DEEPGRAM && (
-                  <div className="mt-4 animate-in slide-in-from-top-2">
-                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Deepgram API Key</label>
-                    <input 
-                      type="password" placeholder="dg_xxxxxxxxxxxx" value={deepgramKey} 
-                      onChange={(e) => setDeepgramKey(e.target.value)}
-                      className="w-full bg-slate-800 border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 outline-none transition-all"
-                    />
+            <div className="flex-1 overflow-y-auto px-6 md:px-12 pb-32 scrollbar-hide">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-12 mt-6">
+                <SettingsSection icon={Mic2} title="Speech-to-Text (STT)" description="Choose your transcription engine">
+                  <div className="grid grid-cols-1 gap-3">
+                    <SettingBtn active={sttProvider === STTEngine.GEMINI} onClick={() => setSttProvider(STTEngine.GEMINI)} icon={Sparkles} label="Gemini Live" description="Best for natural context" />
+                    <SettingBtn active={sttProvider === STTEngine.DEEPGRAM} onClick={() => setSttProvider(STTEngine.DEEPGRAM)} icon={Server} label="Deepgram" description="Ultra low latency" />
+                    <SettingBtn active={sttProvider === STTEngine.WEBSPEECH} onClick={() => setSttProvider(STTEngine.WEBSPEECH)} icon={Globe} label="WebSpeech" description="Privacy-first, browser native" />
                   </div>
-                )}
-              </SettingsSection>
-
-              <SettingsSection icon={MessageSquare} title="Translation" description="AI powered chat completions">
-                <div className="grid grid-cols-1 gap-3">
-                  <SettingBtn active={translationProvider === TranslationEngine.GEMINI} onClick={() => setTranslationProvider(TranslationEngine.GEMINI)} icon={Sparkles} label="Gemini Flash" description="Fastest cloud translation" />
-                  <SettingBtn active={translationProvider === TranslationEngine.OLLAMA_GEMMA} onClick={() => setTranslationProvider(TranslationEngine.OLLAMA_GEMMA)} icon={Cpu} label="Gemma (Ollama)" description="Self-hosted local model" />
-                </div>
-                {translationProvider === TranslationEngine.OLLAMA_GEMMA && (
-                  <div className="mt-4 animate-in slide-in-from-top-2">
-                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Ollama Endpoint</label>
-                    <input 
-                      type="text" placeholder="http://localhost:11434" value={ollamaUrl} 
-                      onChange={(e) => setOllamaUrl(e.target.value)}
-                      className="w-full bg-slate-800 border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 outline-none transition-all"
-                    />
-                  </div>
-                )}
-              </SettingsSection>
-
-              <SettingsSection icon={Volume2} title="Text-to-Speech (TTS)" description="Select your AI voice">
-                <div className="grid grid-cols-1 gap-2">
-                  {[
-                    { id: VoiceName.KORE, name: 'Kore', desc: 'Soft & Friendly' },
-                    { id: VoiceName.PUCK, name: 'Puck', desc: 'Deep & Resonant' },
-                    { id: VoiceName.ZEPHYR, name: 'Zephyr', desc: 'Clear & Crisp' },
-                    { id: VoiceName.FENRIR, name: 'Fenrir', desc: 'Bold & Direct' },
-                    { id: VoiceName.CHARON, name: 'Charon', desc: 'Gravelly & Strong' }
-                  ].map(v => (
-                    <SettingBtn key={v.id} active={voiceName === v.id} onClick={() => setVoiceName(v.id as VoiceName)} icon={Volume2} label={v.name} description={v.desc} />
-                  ))}
-                </div>
-              </SettingsSection>
-
-              <SettingsSection icon={SubtitlesIcon} title="Interface" description="Realtime visual feedback">
-                <button 
-                  onClick={() => setShowSubtitles(!showSubtitles)}
-                  className={`flex items-center justify-between w-full p-4 rounded-2xl border transition-all ${showSubtitles ? 'bg-indigo-600/10 border-indigo-500/50 text-indigo-400' : 'bg-slate-800/40 border-white/5 text-slate-500'}`}
-                >
-                  <div className="flex items-center gap-3">
-                    <SubtitlesIcon className="w-5 h-5" />
-                    <div>
-                      <p className="text-xs font-black uppercase tracking-widest text-left">Overlay Subtitles</p>
-                      <p className="text-[10px] opacity-60">Display floating captions during session</p>
+                  {sttProvider === STTEngine.DEEPGRAM && (
+                    <div className="mt-4 animate-in slide-in-from-top-2">
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Deepgram API Key</label>
+                      <input 
+                        type="password" placeholder="dg_xxxxxxxxxxxx" value={deepgramKey} 
+                        onChange={(e) => setDeepgramKey(e.target.value)}
+                        className="w-full bg-slate-800 border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 outline-none transition-all"
+                      />
                     </div>
+                  )}
+                </SettingsSection>
+
+                <SettingsSection icon={MessageSquare} title="Translation" description="AI powered chat completions">
+                  <div className="grid grid-cols-1 gap-3">
+                    <SettingBtn active={translationProvider === TranslationEngine.GEMINI} onClick={() => setTranslationProvider(TranslationEngine.GEMINI)} icon={Sparkles} label="Gemini Flash" description="Fastest cloud translation" />
+                    <SettingBtn active={translationProvider === TranslationEngine.OLLAMA_GEMMA} onClick={() => setTranslationProvider(TranslationEngine.OLLAMA_GEMMA)} icon={Cpu} label="Gemma (Ollama)" description="Self-hosted local model" />
                   </div>
-                  <div className={`w-10 h-5 rounded-full relative transition-colors ${showSubtitles ? 'bg-indigo-600' : 'bg-slate-700'}`}>
-                    <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${showSubtitles ? 'left-6' : 'left-1'}`} />
+                  {translationProvider === TranslationEngine.OLLAMA_GEMMA && (
+                    <div className="mt-4 animate-in slide-in-from-top-2">
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Ollama Endpoint</label>
+                      <input 
+                        type="text" placeholder="http://localhost:11434" value={ollamaUrl} 
+                        onChange={(e) => setOllamaUrl(e.target.value)}
+                        className="w-full bg-slate-800 border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 outline-none transition-all"
+                      />
+                    </div>
+                  )}
+                </SettingsSection>
+
+                <SettingsSection icon={Volume2} title="Text-to-Speech (TTS)" description="Select your AI voice">
+                  <div className="grid grid-cols-1 gap-2">
+                    {[
+                      { id: VoiceName.KORE, name: 'Kore', desc: 'Soft & Friendly' },
+                      { id: VoiceName.PUCK, name: 'Puck', desc: 'Deep & Resonant' },
+                      { id: VoiceName.ZEPHYR, name: 'Zephyr', desc: 'Clear & Crisp' },
+                      { id: VoiceName.FENRIR, name: 'Fenrir', desc: 'Bold & Direct' },
+                      { id: VoiceName.CHARON, name: 'Charon', desc: 'Gravelly & Strong' }
+                    ].map(v => (
+                      <SettingBtn key={v.id} active={voiceName === v.id} onClick={() => setVoiceName(v.id as VoiceName)} icon={Volume2} label={v.name} description={v.desc} />
+                    ))}
                   </div>
-                </button>
-              </SettingsSection>
+                </SettingsSection>
+
+                <SettingsSection icon={SubtitlesIcon} title="Interface" description="Realtime visual feedback">
+                  <button 
+                    onClick={() => setShowSubtitles(!showSubtitles)}
+                    className={`flex items-center justify-between w-full p-4 rounded-2xl border transition-all ${showSubtitles ? 'bg-indigo-600/10 border-indigo-500/50 text-indigo-400' : 'bg-slate-800/40 border-white/5 text-slate-500'}`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <SubtitlesIcon className="w-5 h-5" />
+                      <div>
+                        <p className="text-xs font-black uppercase tracking-widest text-left">Overlay Subtitles</p>
+                        <p className="text-[10px] opacity-60">Display floating captions during session</p>
+                      </div>
+                    </div>
+                    <div className={`w-10 h-5 rounded-full relative transition-colors ${showSubtitles ? 'bg-indigo-600' : 'bg-slate-700'}`}>
+                      <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${showSubtitles ? 'left-6' : 'left-1'}`} />
+                    </div>
+                  </button>
+                </SettingsSection>
+              </div>
             </div>
-            
-            <button 
-              onClick={() => setCurrentTab('live')}
-              className="w-full mt-12 bg-indigo-600 hover:bg-indigo-500 text-white font-black py-4 rounded-2xl uppercase tracking-widest text-sm transition-all shadow-xl shadow-indigo-500/20"
-            >
-              Back to Live Stream
-            </button>
           </div>
         )}
       </main>
