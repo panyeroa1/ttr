@@ -48,9 +48,15 @@ export interface LiveSessionCallbacks {
   onError?: (e: any) => void;
 }
 
-const VAD_THRESHOLD = 0.006;
-const VAD_HANGOVER_MS = 1000;
+const VAD_THRESHOLD = 0.003;
+const VAD_HANGOVER_MS = 1500;
 const VAD_PREROLL_MS = 400;
+
+/**
+ * Tracks if we have hit a hard daily limit.
+ */
+let dailyQuotaExceeded = false;
+export const isDailyQuotaReached = () => dailyQuotaExceeded;
 
 /**
  * Utility class to manage rate-limited requests to the Gemini API
@@ -59,9 +65,13 @@ class RequestQueue {
   private queue: (() => Promise<any>)[] = [];
   private processing = false;
   private lastRequestTime = 0;
-  private minInterval = 4000; // Increased to 4 seconds for free tier stability
+  private minInterval = 4000; 
 
   async add<T>(requestFn: () => Promise<T>): Promise<T> {
+    if (dailyQuotaExceeded) {
+      throw new Error("DAILY_QUOTA_REACHED");
+    }
+
     return new Promise((resolve, reject) => {
       this.queue.push(async () => {
         try {
@@ -80,6 +90,13 @@ class RequestQueue {
     this.processing = true;
 
     while (this.queue.length > 0) {
+      if (dailyQuotaExceeded) {
+        // Clear queue if daily quota is reached
+        this.queue.forEach(q => {}); // No-op
+        this.queue = [];
+        break;
+      }
+
       const now = Date.now();
       const timeSinceLast = now - this.lastRequestTime;
       if (timeSinceLast < this.minInterval) {
@@ -100,13 +117,21 @@ class RequestQueue {
     try {
       return await requestFn();
     } catch (error: any) {
+      const errorStr = JSON.stringify(error);
       const errorMessage = error?.message || "";
-      const isRateLimit = errorMessage.includes('429') || error?.status === 429 || error?.name === 'RESOURCE_EXHAUSTED';
+      const is429 = errorMessage.includes('429') || error?.status === 429 || error?.name === 'RESOURCE_EXHAUSTED';
       
-      if (isRateLimit && retries > 0) {
+      // Specific detection for Daily Quota vs Rate Limit
+      const isDailyLimit = errorStr.includes('DailyRequestsPerDay') || errorStr.includes('quotaValue":"20"') || errorMessage.includes('daily limit');
+
+      if (isDailyLimit) {
+        dailyQuotaExceeded = true;
+        console.error("CRITICAL: Gemini Daily Quota Exhausted. Suspending all API calls.");
+        throw new Error("DAILY_QUOTA_REACHED");
+      }
+
+      if (is429 && retries > 0) {
         let nextDelay = delay;
-        
-        // Scan all details for RetryInfo as it's not always the first element
         if (Array.isArray(error?.details)) {
           for (const detail of error.details) {
             if (detail.retryDelay) {
@@ -340,7 +365,8 @@ export class GeminiService {
     return apiQueue.add(async () => {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
+        // Switched to gemini-flash-latest as it often has higher default quotas than gemini-3 previews
+        model: 'gemini-flash-latest',
         contents: `Translate the following text to ${targetLang}. Preserve the original tone and context. Only return the translated text without extra formatting or comments.
         
 Text: "${text}"`,

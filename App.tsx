@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { UserRole, AudioSource, TranscriptionItem, TranslationItem, VoiceName, STTEngine, TranslationEngine } from './types';
-import { gemini, decode, decodeAudioData, SessionStatus } from './services/geminiService';
+import { gemini, decode, decodeAudioData, SessionStatus, isDailyQuotaReached } from './services/geminiService';
 import { supabase, saveTranscript, saveTranslation, fetchTranscripts, getUserProfile } from './lib/supabase';
 import SessionControls from './components/SessionControls';
 import LiveCaptions from './components/LiveCaptions';
@@ -176,7 +176,7 @@ const App: React.FC = () => {
   };
 
   const processTranscriptItem = useCallback(async (item: any, playAudio: boolean = true) => {
-    if (!item || !item.text || isRateLimited) return;
+    if (!item || !item.text) return;
 
     const speakerName = item.sender || displayName;
     setActiveSpeakerName(speakerName);
@@ -197,11 +197,20 @@ const App: React.FC = () => {
     const lastOffset = processedTextOffsetRef.current.get(item.id) || 0;
     const currentText = item.text;
     const newContent = currentText.substring(lastOffset);
-    const { sentences, lastIndex } = segmentIntoSentences(newContent, item.isFinal);
-
+    
     if (newContent.trim()) {
       setCurrentSubtitle({ text: newContent.trim(), isFinal: item.isFinal });
     }
+
+    // "dont make any translation in the speak tab"
+    // If the current user is a speaker, we only care about showing the transcription above.
+    // Translation and TTS are only for listeners.
+    if (role !== UserRole.LISTENER) return;
+    
+    // Stop processing further logic if hard quota is hit
+    if (isRateLimited || isDailyQuotaReached()) return;
+
+    const { sentences, lastIndex } = segmentIntoSentences(newContent, item.isFinal);
 
     if (sentences.length > 0) {
       processedTextOffsetRef.current.set(item.id, lastOffset + lastIndex);
@@ -254,16 +263,15 @@ const App: React.FC = () => {
         } catch (err: any) {
           console.error("Translation Pipeline Error:", err);
           const errorMsg = err?.message || "";
-          if (errorMsg.includes('429') || errorMsg.includes('RESOURCE_EXHAUSTED')) {
+          if (errorMsg.includes('429') || errorMsg.includes('RESOURCE_EXHAUSTED') || errorMsg === "DAILY_QUOTA_REACHED") {
             setIsRateLimited(true);
-            setLastError("Gemini API Daily Quota Exceeded (20 requests limit). Translation paused.");
-            // Reset after 30 seconds to allow for potential retryInfo parsing if not hard limited
+            setLastError("Gemini API Daily Quota Exceeded. Translation and TTS paused.");
             setTimeout(() => setIsRateLimited(false), 30000);
           }
         }
       }
     }
-  }, [targetLang, voiceName, displayName, translationProvider, ollamaUrl, currentUserId, isRateLimited]);
+  }, [targetLang, voiceName, displayName, translationProvider, ollamaUrl, currentUserId, isRateLimited, role]);
 
   useEffect(() => {
     if (!isActive || role !== UserRole.LISTENER) return;
@@ -508,19 +516,19 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {isRateLimited && (
+      {(isDailyQuotaReached() || isRateLimited) && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[100] w-[95%] max-w-2xl animate-in slide-in-from-top duration-300">
           <div className="bg-amber-500/15 border border-amber-500/40 backdrop-blur-2xl p-5 rounded-3xl flex items-start gap-4 shadow-2xl">
             <Info className="w-5 h-5 text-amber-500 shrink-0 mt-1" />
             <div className="flex-1 min-w-0">
               <h4 className="text-amber-400 font-black text-xs uppercase tracking-widest mb-1">Quota Warning</h4>
-              <p className="text-amber-100/80 text-sm">Gemini Free Tier limit reached (20 daily requests). Translation is currently paused to prevent errors. Please wait or upgrade your API plan.</p>
+              <p className="text-amber-100/80 text-sm">Gemini API daily quota reached. Translation is currently paused. Please wait or upgrade your API plan.</p>
             </div>
           </div>
         </div>
       )}
 
-      {lastError && !isRateLimited && (
+      {lastError && !isDailyQuotaReached() && !isRateLimited && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[100] w-[95%] max-w-2xl animate-in slide-in-from-top duration-300">
           <div className="bg-rose-500/15 border border-rose-500/40 backdrop-blur-2xl p-5 rounded-3xl flex items-start gap-4 shadow-2xl">
             <AlertCircle className="w-5 h-5 text-rose-500 shrink-0 mt-1" />

@@ -27,3 +27,29 @@
 
 ### End Timestamp
 **End Timestamp**: 2024-05-23 10:05:00 UTC
+
+---
+
+## Session ID: 20250304-123000
+**Start Timestamp**: 2025-03-04 12:30:00 UTC
+
+### Objective(s)
+1. Improve Voice Activity Detection (VAD) accuracy.
+2. Adjust VAD threshold and hangover time to handle quieter speakers and longer natural pauses.
+
+### Repo State
+- `services/geminiService.ts` contains constants for audio segmentation.
+
+### Files Inspected
+- `services/geminiService.ts`
+
+### Assumptions / Risks
+- Lowering `VAD_THRESHOLD` might increase background noise capture in loud environments.
+- Increasing `VAD_HANGOVER_MS` increases latency for finalizing utterances.
+
+### Summary of Changes
+- **services/geminiService.ts**: Changed `VAD_THRESHOLD` from `0.006` to `0.003`.
+- **services/geminiService.ts**: Changed `VAD_HANGOVER_MS` from `1000` to `1500`.
+
+### End Timestamp
+**End Timestamp**: 2025-03-04 12:35:00 UTC
