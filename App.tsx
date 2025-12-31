@@ -1,7 +1,8 @@
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { UserRole, AudioSource, TranscriptionItem, TranslationItem, VoiceType } from './types';
 import { gemini, decode, decodeAudioData, SessionStatus } from './services/geminiService';
-import { supabase, saveTranscript, fetchTranscripts } from './lib/supabase';
+import { supabase, saveTranscript, fetchTranscripts, getUserProfile } from './lib/supabase';
 import SessionControls from './components/SessionControls';
 import LiveCaptions from './components/LiveCaptions';
 import { Sparkles, Database, AlertCircle, X, Wifi, CloudLightning, Mic2, VolumeX, Key } from 'lucide-react';
@@ -22,6 +23,7 @@ const App: React.FC = () => {
   const [translations, setTranslations] = useState<TranslationItem[]>([]);
   const [audioLevel, setAudioLevel] = useState(0);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState<string>('Guest Speaker');
   const [dbStatus, setDbStatus] = useState<'connected' | 'error' | 'authenticating'>('authenticating');
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>('disconnected');
   const [lastError, setLastError] = useState<string | null>(null);
@@ -39,15 +41,11 @@ const App: React.FC = () => {
   const syncTimeoutRef = useRef<number | null>(null);
   const activeTtsCountRef = useRef<number>(0);
 
-  // Background Resilience: Wake Lock
   const requestWakeLock = async () => {
     if ('wakeLock' in navigator) {
       try {
         wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
-        console.debug("Wake Lock acquired.");
-      } catch (err: any) {
-        console.warn(`Wake Lock Error: ${err.message}`);
-      }
+      } catch (err: any) {}
     }
   };
 
@@ -55,7 +53,6 @@ const App: React.FC = () => {
     if (wakeLockRef.current) {
       wakeLockRef.current.release().then(() => {
         wakeLockRef.current = null;
-        console.debug("Wake Lock released.");
       });
     }
   };
@@ -64,16 +61,20 @@ const App: React.FC = () => {
     const initAuth = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
+        let user;
         if (session) {
-          setCurrentUserId(session.user.id);
-          setDbStatus('connected');
+          user = session.user;
         } else {
           const { data, error } = await supabase.auth.signInAnonymously();
           if (error) throw error;
-          if (data.user) {
-            setCurrentUserId(data.user.id);
-            setDbStatus('connected');
-          }
+          user = data.user;
+        }
+
+        if (user) {
+          setCurrentUserId(user.id);
+          const { data: profile } = await getUserProfile(user.id);
+          if (profile?.display_name) setDisplayName(profile.display_name);
+          setDbStatus('connected');
         }
       } catch (err: any) {
         setDbStatus('error');
@@ -110,11 +111,9 @@ const App: React.FC = () => {
     }
   };
 
-  // Function to process a single transcript: translate and display
   const processTranscriptItem = useCallback(async (item: any, playAudio: boolean = true) => {
     if (!item || !item.text) return;
 
-    // 1. Update Transcripts state
     setTranscripts(prev => {
       const idx = prev.findIndex(t => t.id === item.id);
       if (idx > -1) {
@@ -125,7 +124,6 @@ const App: React.FC = () => {
       return [...prev, { id: item.id, text: item.text, isFinal: true, speaker: item.sender }];
     });
 
-    // 2. Translate
     try {
       const translated = await gemini.translate(item.text, 'auto', targetLang);
       const transId = crypto.randomUUID();
@@ -137,7 +135,6 @@ const App: React.FC = () => {
         lang: targetLang.toUpperCase() 
       }]);
 
-      // 3. Audio Out (TTS)
       if (playAudio && outputAudioContextRef.current) {
         const audioData = await gemini.generateSpeech(translated, voiceType);
         if (audioData) {
@@ -150,7 +147,6 @@ const App: React.FC = () => {
           source.buffer = buffer;
           source.connect(ctx.destination);
           
-          // Tracking state for Echo Cancellation / Gating
           activeTtsCountRef.current++;
           setIsTtsPlaying(true);
           
@@ -171,14 +167,12 @@ const App: React.FC = () => {
     }
   }, [targetLang, voiceType]);
 
-  // Listener Logic: Real-time Subscription
   useEffect(() => {
     if (!isActive || role !== UserRole.LISTENER) return;
 
     const transcriptChannel = supabase
       .channel('public:transcriptions')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'transcriptions' }, (payload) => {
-        // Only process new/updated final rows in real-time
         processTranscriptItem(payload.new, true);
       })
       .subscribe();
@@ -188,7 +182,7 @@ const App: React.FC = () => {
     };
   }, [isActive, role, processTranscriptItem]);
 
-  const syncToDatabase = useCallback(async (text: string, isFinal: boolean) => {
+  const syncToDatabase = useCallback(async (text: string, isFinal: boolean, speakerNameOverride?: string) => {
     if (!text.trim() || !currentUserId || role !== UserRole.SPEAKER) return;
     const utteranceId = currentUtteranceIdRef.current;
 
@@ -198,7 +192,7 @@ const App: React.FC = () => {
           id: utteranceId, 
           user_id: currentUserId, 
           room_id: DEFAULT_ROOM, 
-          speaker: 'HOST_SPEAKER', 
+          speaker: speakerNameOverride || displayName, 
           text
         });
 
@@ -216,7 +210,7 @@ const App: React.FC = () => {
     } else {
       syncTimeoutRef.current = window.setTimeout(performSync, SYNC_DEBOUNCE_MS);
     }
-  }, [role, currentUserId]);
+  }, [role, currentUserId, displayName]);
 
   const toggleActive = useCallback(async () => {
     if (isActive) {
@@ -231,7 +225,6 @@ const App: React.FC = () => {
     } else {
       if (role === UserRole.IDLE) return;
 
-      // Ensure key is selected if we are on a platform that requires it
       if (aiStudio && typeof aiStudio.hasSelectedApiKey === 'function') {
         const hasKey = await aiStudio.hasSelectedApiKey();
         if (!hasKey) {
@@ -243,15 +236,12 @@ const App: React.FC = () => {
       try {
         await requestWakeLock();
 
-        // hydration step: if listener, fetch existing history
         if (role === UserRole.LISTENER) {
           setSessionStatus('connecting');
           const { data, error } = await fetchTranscripts(DEFAULT_ROOM);
           if (error) {
             setLastError("Failed to fetch history: " + error.message);
           } else if (data && data.length > 0) {
-            // Load historical transcripts into UI
-            // We don't play historical audio to avoid noise, but we translate them
             for (const item of data) {
               await processTranscriptItem(item, false); 
             }
@@ -262,7 +252,6 @@ const App: React.FC = () => {
         let stream: MediaStream | null = null;
         if (role === UserRole.SPEAKER) {
           if (audioSource === AudioSource.MIC) {
-            // Explicit Echo Cancellation and Noise Suppression for MIC
             stream = await navigator.mediaDevices.getUserMedia({ 
               audio: {
                 echoCancellation: true,
@@ -272,29 +261,23 @@ const App: React.FC = () => {
               } 
             });
           } else {
-            // For TAB or SYSTEM audio, we use getDisplayMedia
-            // Note: Users MUST check the "Share Audio" checkbox in the browser dialog
             try {
               stream = await navigator.mediaDevices.getDisplayMedia({
-                video: true, // Required by most browsers to show the prompt
+                video: true,
                 audio: {
-                  echoCancellation: false, // Usually want raw audio from tab/system
+                  echoCancellation: false,
                   noiseSuppression: false,
                   autoGainControl: false,
                   sampleRate: 16000
                 }
               });
               
-              // Verify we actually got an audio track
               if (stream.getAudioTracks().length === 0) {
                 stream.getTracks().forEach(t => t.stop());
-                throw new Error("No audio track found. Did you check 'Share audio' in the share dialog?");
+                throw new Error("No audio track found. Did you check 'Share audio'?");
               }
-
-              // We don't actually need the video for transcription, but we keep it
-              // so the browser's "Sharing..." bar stays active.
             } catch (err: any) {
-              if (err.name === 'NotAllowedError') return; // User cancelled
+              if (err.name === 'NotAllowedError') return;
               throw err;
             }
           }
@@ -304,49 +287,42 @@ const App: React.FC = () => {
         
         if (role === UserRole.SPEAKER) {
           const manager = await gemini.connectLive({
-            onTranscription: (text, isFinal) => {
+            onTranscription: (text, isFinal, speaker) => {
               const uid = currentUtteranceIdRef.current;
+              const speakerName = speaker || displayName;
               setTranscripts(prev => {
                 const idx = prev.findIndex(t => t.id === uid);
                 if (idx > -1) {
                   const updated = [...prev];
-                  updated[idx] = { ...updated[idx], text, isFinal };
+                  updated[idx] = { ...updated[idx], text, isFinal, speaker: speakerName };
                   return updated;
                 }
-                return [...prev, { id: uid, text, isFinal, speaker: 'ME (SPEAKER)' }];
+                return [...prev, { id: uid, text, isFinal, speaker: speakerName }];
               });
-              syncToDatabase(text, isFinal);
+              syncToDatabase(text, isFinal, speakerName);
             },
             onStatusChange: setSessionStatus,
             onError: (e) => setLastError(e.message)
-          });
+          }, displayName);
           sessionManagerRef.current = manager;
 
           if (stream) {
             const ctx = audioContextRef.current!;
             if (ctx.state === 'suspended') await ctx.resume();
-            
-            // For display media, we specifically want the audio tracks
             const audioTrack = stream.getAudioTracks()[0];
             const audioStream = new MediaStream([audioTrack]);
-            
             const source = ctx.createMediaStreamSource(audioStream);
             const processor = ctx.createScriptProcessor(4096, 1, 1);
             processor.onaudioprocess = (e) => {
               const data = e.inputBuffer.getChannelData(0);
-              
-              // Gating logic: If TTS is playing, we send silence to the model 
-              // or simply stop sending to prevent feedback/echo
               if (activeTtsCountRef.current > 0) {
                 setAudioLevel(0);
                 return; 
               }
-
               let rms = 0;
               for (let i = 0; i < data.length; i++) rms += data[i] * data[i];
-              // Scale for UI visibility (RMS 0-1)
               const level = Math.sqrt(rms / data.length);
-              setAudioLevel(Math.min(level * 5, 1)); // 5x multiplier for visual sensitivity
+              setAudioLevel(Math.min(level * 5, 1));
               sessionManagerRef.current?.processAudio(data);
             };
             source.connect(processor);
@@ -359,7 +335,7 @@ const App: React.FC = () => {
         releaseWakeLock();
       }
     }
-  }, [isActive, role, audioSource, syncToDatabase, processTranscriptItem]);
+  }, [isActive, role, audioSource, displayName, syncToDatabase, processTranscriptItem]);
 
   return (
     <div className="min-h-[100dvh] flex flex-col bg-slate-950 text-slate-100 overflow-x-hidden relative font-inter">
@@ -408,7 +384,10 @@ const App: React.FC = () => {
             <div className="p-2 bg-indigo-600 rounded-xl shadow-lg shadow-indigo-500/20">
               <Sparkles className="w-5 h-5 text-white" />
             </div>
-            <h1 className="text-xl font-black tracking-tighter uppercase tracking-widest">TTR <span className="text-indigo-500">/</span> Realtime</h1>
+            <div>
+              <h1 className="text-xl font-black tracking-tighter uppercase tracking-widest leading-none">TTR <span className="text-indigo-500">/</span> Realtime</h1>
+              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">{displayName}</p>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <StatusBadge 

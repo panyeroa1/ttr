@@ -31,25 +31,41 @@
 ---
 
 ## Session ID: 20240521-233000
-**Start Timestamp**: 2024-05-21 23:30:00 UTC
+**Summary**: Implemented real-time audio level visualizer.
+
+---
+
+## Session ID: 20240522-000000
+**Start Timestamp**: 2024-05-22 00:00:00 UTC
 
 ### Objective(s)
-1. Visualize the current audio input level for the active speaker.
-2. Provide immediate visual feedback to indicate the mic is picking up sound.
+1. Identify and display the active speaker's name in real-time.
+2. Integrate with Supabase profiles for authenticated identity.
+3. Configure Gemini Live for multi-speaker diarization.
 
 ### Repo State
-- `audioLevel` state was calculated but not rendered visually.
+- Transcriptions were hardcoded to "ME (SPEAKER)" for the host.
+- No profile integration in the real-time flow.
 
 ### Files Inspected
+- `lib/supabase.ts`
+- `services/geminiService.ts`
 - `App.tsx`
 
 ### Assumptions / Risks
-- RMS scaling for visual meter may need adjustment depending on device sensitivity.
+- Diarization performance depends on audio quality and model latency.
+- Gemini Live instruction-following for prefixes `[Speaker X]:` might be inconsistent under heavy load.
 
 ### Summary of Changes
-- **AudioLevelMeter Component**: Created a multi-segment visualizer representing volume intensity.
-- **Enhanced Level Calculation**: Scaled the RMS value in `onaudioprocess` for better UI responsiveness.
-- **Header Integration**: Added the meter to the "MIC ACTIVE" badge in the header for constant status monitoring.
+- **Supabase Integration**: Added `getUserProfile` to fetch the display name.
+- **Gemini Live Service**: 
+    - Added `userName` to `LiveSessionManager`.
+    - Updated `systemInstruction` to include primary speaker identity and diarization directives.
+    - Implemented regex parsing for `[Speaker N]:` prefixes in the transcription stream.
+- **App Component**: 
+    - Fetches profile on init.
+    - Displays current user name in header.
+    - Correctly maps speaker identities in the transcription state and Supabase sync.
 
 ### End Timestamp
-**End Timestamp**: 2024-05-21 23:45:00 UTC
+**End Timestamp**: 2024-05-22 00:30:00 UTC

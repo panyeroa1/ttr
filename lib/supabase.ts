@@ -6,18 +6,19 @@ const SUPABASE_KEY = 'sb_publishable_uTIwEo4TJBo_YkX-OWN9qQ_5HJvl4c5';
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-/**
- * !!! IMPORTANT: SQL FIX FOR RLS ERRORS !!!
- * If you see "violates row-level security policy", you MUST run this in your Supabase SQL Editor:
- * 
- * -- Allow public access for local development
- * ALTER TABLE public.transcriptions DISABLE ROW LEVEL SECURITY;
- * ALTER TABLE public.translations DISABLE ROW LEVEL SECURITY;
- * 
- * -- OR run specific policies (better for production):
- * CREATE POLICY "Allow public insert/update" ON "public"."transcriptions" FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
- * CREATE POLICY "Allow public insert/update trans" ON "public"."translations" FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
- */
+export const getUserProfile = async (userId: string) => {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('display_name, avatar_url')
+    .eq('id', userId)
+    .single();
+  
+  if (error) {
+    console.error('Error fetching profile:', error.message);
+    return { error };
+  }
+  return { data };
+};
 
 export const saveTranscript = async (data: { id: string, user_id: string, room_id: string, speaker: string, text: string }) => {
   const { data: result, error } = await supabase

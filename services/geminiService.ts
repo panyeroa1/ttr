@@ -1,8 +1,6 @@
+
 import { GoogleGenAI, Modality, LiveServerMessage } from "@google/genai";
 
-/**
- * Base64 encoding for audio data
- */
 export function encode(bytes: Uint8Array) {
   let binary = '';
   const len = bytes.byteLength;
@@ -12,9 +10,6 @@ export function encode(bytes: Uint8Array) {
   return btoa(binary);
 }
 
-/**
- * Base64 decoding for audio data
- */
 export function decode(base64: string) {
   const binaryString = atob(base64);
   const len = binaryString.length;
@@ -25,9 +20,6 @@ export function decode(base64: string) {
   return bytes;
 }
 
-/**
- * Decode raw PCM audio data into an AudioBuffer
- */
 export async function decodeAudioData(
   data: Uint8Array,
   ctx: AudioContext,
@@ -50,18 +42,15 @@ export async function decodeAudioData(
 export type SessionStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'error';
 
 export interface LiveSessionCallbacks {
-  onTranscription: (text: string, isFinal: boolean) => void;
+  onTranscription: (text: string, isFinal: boolean, speaker?: string) => void;
   onStatusChange?: (status: SessionStatus) => void;
   onInterrupted?: () => void;
   onError?: (e: any) => void;
 }
 
-/**
- * VAD Configuration
- */
 const VAD_THRESHOLD = 0.006;
-const VAD_HANGOVER_MS = 1000; // Keep sending audio for 1s after last detected speech
-const VAD_PREROLL_MS = 400;   // Buffer 400ms of audio to catch soft starts
+const VAD_HANGOVER_MS = 1000;
+const VAD_PREROLL_MS = 400;
 
 export class LiveSessionManager {
   private ai: GoogleGenAI | null = null;
@@ -72,15 +61,16 @@ export class LiveSessionManager {
   private maxRetries = 3;
   private isExplicitlyClosed = false;
   private currentTranscription = '';
+  private userName: string = 'Speaker';
 
-  // VAD State
   private isSpeaking = false;
   private lastSpeechTime = 0;
   private preRollBuffer: Uint8Array[] = [];
   private readonly sampleRate = 16000;
 
-  constructor(callbacks: LiveSessionCallbacks) {
+  constructor(callbacks: LiveSessionCallbacks, userName: string) {
     this.callbacks = callbacks;
+    this.userName = userName;
   }
 
   private setStatus(status: SessionStatus) {
@@ -100,12 +90,10 @@ export class LiveSessionManager {
     const apiKey = process.env.API_KEY;
     if (!apiKey) {
       this.setStatus('error');
-      this.callbacks.onError?.(new Error('API Key is missing. Please ensure you are authenticated.'));
+      this.callbacks.onError?.(new Error('API Key missing'));
       return;
     }
 
-    // Always create a fresh GoogleGenAI instance right before connecting
-    // to ensure we have the most up-to-date API key.
     this.ai = new GoogleGenAI({ apiKey });
     this.setStatus(this.retryCount > 0 ? 'reconnecting' : 'connecting');
 
@@ -114,7 +102,6 @@ export class LiveSessionManager {
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
         callbacks: {
           onopen: () => {
-            console.log('Gemini Live session opened');
             this.setStatus('connected');
             this.retryCount = 0;
           },
@@ -122,12 +109,24 @@ export class LiveSessionManager {
             if (message.serverContent?.inputTranscription) {
               const text = message.serverContent.inputTranscription.text;
               this.currentTranscription += text;
-              this.callbacks.onTranscription(this.currentTranscription, false);
+              
+              // Handle optional speaker labels if the model adds them like "[Speaker 1]: text"
+              const speakerMatch = this.currentTranscription.match(/^\[(Speaker \d+)\]:\s*(.*)/i);
+              if (speakerMatch) {
+                this.callbacks.onTranscription(speakerMatch[2], false, speakerMatch[1]);
+              } else {
+                this.callbacks.onTranscription(this.currentTranscription, false, this.userName);
+              }
             }
             
             if (message.serverContent?.turnComplete) {
               if (this.currentTranscription.trim()) {
-                this.callbacks.onTranscription(this.currentTranscription, true);
+                const speakerMatch = this.currentTranscription.match(/^\[(Speaker \d+)\]:\s*(.*)/i);
+                if (speakerMatch) {
+                  this.callbacks.onTranscription(speakerMatch[2], true, speakerMatch[1]);
+                } else {
+                  this.callbacks.onTranscription(this.currentTranscription, true, this.userName);
+                }
               }
               this.currentTranscription = '';
             }
@@ -137,40 +136,33 @@ export class LiveSessionManager {
             }
           },
           onerror: (e) => {
-            console.error('Gemini Live error:', e);
-            
-            // If the error message mentions "entity was not found", it often means 
-            // the API key or project isn't valid for this specific model/feature.
-            if (e.message?.includes('Requested entity was not found')) {
-               this.callbacks.onError?.(new Error('API Key Error: Requested project or model not found. Check billing.'));
-            } else {
-               this.callbacks.onError?.(e);
-            }
             this.handleDisconnect();
+            this.callbacks.onError?.(e);
           },
-          onclose: (e) => {
-            console.log('Gemini Live session closed', e);
-            this.handleDisconnect();
-          },
+          onclose: (e) => this.handleDisconnect(),
         },
         config: {
           responseModalities: [Modality.AUDIO],
           inputAudioTranscription: {},
-          systemInstruction: `You are a world-class real-time transcriptionist. 
+          systemInstruction: `You are a specialized transcription agent for a meeting tool.
+          
+          PRIMARY SPEAKER: ${this.userName}
           
           TASK:
-          Convert audio stream into highly accurate text.
+          Transcribe the incoming audio stream with high fidelity.
           
-          GUIDELINES:
-          1. VERBATIM: Output exactly what is spoken.
-          2. FORMATTING: Use professional punctuation and casing.
-          3. SEGMENTATION: Be sensitive to conversational pauses. Trigger 'turnComplete' on significant silence (approx 1.5s).
-          4. NO CHATTER: Do not respond to content. Only transcribe.
-          5. NO DELAY: Stream transcription chunks as soon as they are parsed.`,
+          DIARIZATION RULES:
+          1. If you hear multiple distinct voices, label them as [Speaker 1], [Speaker 2], etc.
+          2. If the voice matches the profile of the primary speaker (${this.userName}), you may label it as such or leave it for the UI to handle.
+          3. Format: "[Speaker Name]: Transcription text".
+          
+          GENERAL RULES:
+          - Verbatim output only.
+          - Professional punctuation.
+          - High sensitivity to turns and pauses.`,
         }
       });
     } catch (err: any) {
-      console.error('Failed to establish connection:', err);
       this.handleDisconnect();
     }
   }
@@ -188,49 +180,35 @@ export class LiveSessionManager {
       setTimeout(() => this.internalConnect(), delay);
     } else {
       this.setStatus('error');
-      this.callbacks.onError?.(new Error('Network error: Persistent connection failure. Please check your internet connection and API key permissions.'));
     }
   }
 
-  /**
-   * Processes raw audio data with VAD logic
-   */
   processAudio(data: Float32Array) {
     if (this.status !== 'connected' || !this.currentSession) return;
-
-    // Calculate RMS for basic VAD
     let rms = 0;
     for (let i = 0; i < data.length; i++) rms += data[i] * data[i];
     const currentLevel = Math.sqrt(rms / data.length);
-
-    // Convert to PCM
     const int16 = new Int16Array(data.length);
     for (let i = 0; i < data.length; i++) int16[i] = data[i] * 32768;
     const pcmBytes = new Uint8Array(int16.buffer);
-
     const now = Date.now();
 
     if (currentLevel > VAD_THRESHOLD) {
       this.lastSpeechTime = now;
       if (!this.isSpeaking) {
         this.isSpeaking = true;
-        // Flush Pre-roll
-        console.debug("VAD: Speech Start Detected. Flushing Pre-roll.");
         this.preRollBuffer.forEach(chunk => this.sendToModel(chunk));
         this.preRollBuffer = [];
       }
       this.sendToModel(pcmBytes);
     } else {
       if (this.isSpeaking) {
-        // Hangover Period
         if (now - this.lastSpeechTime < VAD_HANGOVER_MS) {
           this.sendToModel(pcmBytes);
         } else {
-          console.debug("VAD: Speech End (Hangover Finished).");
           this.isSpeaking = false;
         }
       } else {
-        // Lookbehind Buffer (Pre-roll)
         this.preRollBuffer.push(pcmBytes);
         const maxPreRollFrames = (VAD_PREROLL_MS / 1000) * (this.sampleRate / data.length);
         if (this.preRollBuffer.length > maxPreRollFrames) {
@@ -246,9 +224,7 @@ export class LiveSessionManager {
         this.currentSession.sendRealtimeInput({
           media: { data: encode(data), mimeType: 'audio/pcm;rate=16000' }
         });
-      } catch (err) {
-        console.warn("Failed to send audio chunk:", err);
-      }
+      } catch (err) {}
     }
   }
 
@@ -266,8 +242,8 @@ export class LiveSessionManager {
 }
 
 export class GeminiService {
-  async connectLive(callbacks: LiveSessionCallbacks) {
-    const manager = new LiveSessionManager(callbacks);
+  async connectLive(callbacks: LiveSessionCallbacks, userName: string) {
+    const manager = new LiveSessionManager(callbacks, userName);
     await manager.connect();
     return manager;
   }
@@ -285,7 +261,6 @@ export class GeminiService {
   async generateSpeech(text: string, voiceName: string = 'Aoede') {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const prebuiltVoice = voiceName === 'Orus' ? 'Puck' : 'Kore';
-
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-preview-tts",
       contents: [{ parts: [{ text: text }] }],
