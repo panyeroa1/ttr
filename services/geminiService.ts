@@ -52,6 +52,84 @@ const VAD_THRESHOLD = 0.006;
 const VAD_HANGOVER_MS = 1000;
 const VAD_PREROLL_MS = 400;
 
+/**
+ * Utility class to manage rate-limited requests to the Gemini API
+ */
+class RequestQueue {
+  private queue: (() => Promise<any>)[] = [];
+  private processing = false;
+  private lastRequestTime = 0;
+  private minInterval = 4000; // Increased to 4 seconds for free tier stability
+
+  async add<T>(requestFn: () => Promise<T>): Promise<T> {
+    return new Promise((resolve, reject) => {
+      this.queue.push(async () => {
+        try {
+          const result = await this.executeWithRetry(requestFn);
+          resolve(result);
+        } catch (error) {
+          reject(error);
+        }
+      });
+      this.process();
+    });
+  }
+
+  private async process() {
+    if (this.processing || this.queue.length === 0) return;
+    this.processing = true;
+
+    while (this.queue.length > 0) {
+      const now = Date.now();
+      const timeSinceLast = now - this.lastRequestTime;
+      if (timeSinceLast < this.minInterval) {
+        await new Promise(r => setTimeout(r, this.minInterval - timeSinceLast));
+      }
+
+      const task = this.queue.shift();
+      if (task) {
+        this.lastRequestTime = Date.now();
+        await task();
+      }
+    }
+
+    this.processing = false;
+  }
+
+  private async executeWithRetry<T>(requestFn: () => Promise<T>, retries = 3, delay = 3000): Promise<T> {
+    try {
+      return await requestFn();
+    } catch (error: any) {
+      const errorMessage = error?.message || "";
+      const isRateLimit = errorMessage.includes('429') || error?.status === 429 || error?.name === 'RESOURCE_EXHAUSTED';
+      
+      if (isRateLimit && retries > 0) {
+        let nextDelay = delay;
+        
+        // Scan all details for RetryInfo as it's not always the first element
+        if (Array.isArray(error?.details)) {
+          for (const detail of error.details) {
+            if (detail.retryDelay) {
+              const delaySeconds = parseInt(detail.retryDelay.replace('s', ''));
+              if (!isNaN(delaySeconds)) {
+                nextDelay = delaySeconds * 1000;
+                break;
+              }
+            }
+          }
+        }
+        
+        console.warn(`Rate limit hit. Retrying in ${nextDelay}ms... (${retries} retries left)`);
+        await new Promise(r => setTimeout(r, nextDelay));
+        return this.executeWithRetry(requestFn, retries - 1, nextDelay * 2);
+      }
+      throw error;
+    }
+  }
+}
+
+const apiQueue = new RequestQueue();
+
 export class LiveSessionManager {
   private ai: GoogleGenAI | null = null;
   private callbacks: LiveSessionCallbacks;
@@ -164,10 +242,11 @@ export class LiveSessionManager {
           - Every time a new voice speaks, prefix with "[Speaker X]: ".
           
           TRANSCRIPTION STYLE:
-          - Verbatim.
-          - MANDATORY PUNCTUATION: You MUST provide terminal punctuation (., ?, !, or Chinese 。) immediately after every sentence. 
-          - Do not wait for long pauses. 
-          - Precise real-time translation depends on these markers. If a thought is finished, punctuate it.
+          - Verbatim and highly precise.
+          - ABSOLUTE PUNCTUATION REQUIREMENT: You MUST provide terminal punctuation (., ?, !, or Chinese 。) immediately after every single completed thought. 
+          - Do not wait for long pauses or the end of a turn. 
+          - If a sentence is grammatically complete, punctuate it immediately. 
+          - This is CRITICAL for down-stream real-time translation and subtitle rendering.
           - Professional formatting.`,
         }
       });
@@ -258,30 +337,34 @@ export class GeminiService {
   }
 
   async translate(text: string, sourceLang: string, targetLang: string) {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: `Translate the following text to ${targetLang}. Preserve the original tone and context. Only return the translated text without extra formatting or comments.
-      
+    return apiQueue.add(async () => {
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: `Translate the following text to ${targetLang}. Preserve the original tone and context. Only return the translated text without extra formatting or comments.
+        
 Text: "${text}"`,
-      config: { temperature: 0.1 }
+        config: { temperature: 0.1 }
+      });
+      return response.text?.trim() || "";
     });
-    return response.text?.trim() || "";
   }
 
   async generateSpeech(text: string, voiceName: VoiceName = VoiceName.KORE) {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-preview-tts",
-      contents: [{ parts: [{ text: text }] }],
-      config: {
-        responseModalities: [Modality.AUDIO],
-        speechConfig: {
-          voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceName } },
+    return apiQueue.add(async () => {
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash-preview-tts",
+        contents: [{ parts: [{ text: text }] }],
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceName } },
+          },
         },
-      },
+      });
+      return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
     });
-    return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
   }
 }
 

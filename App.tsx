@@ -1,15 +1,16 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { UserRole, AudioSource, TranscriptionItem, TranslationItem, VoiceName, STTEngine, TranslationEngine } from './types';
 import { gemini, decode, decodeAudioData, SessionStatus } from './services/geminiService';
-import { supabase, saveTranscript, fetchTranscripts, getUserProfile } from './lib/supabase';
+import { supabase, saveTranscript, saveTranslation, fetchTranscripts, getUserProfile } from './lib/supabase';
 import SessionControls from './components/SessionControls';
 import LiveCaptions from './components/LiveCaptions';
-import { Sparkles, Database, AlertCircle, X, Wifi, CloudLightning, Mic2, VolumeX, Key, User as UserIcon, Settings, Server, Globe, Cpu } from 'lucide-react';
+import SubtitlesOverlay from './components/SubtitlesOverlay';
+import { Sparkles, Database, AlertCircle, X, Wifi, CloudLightning, Mic2, VolumeX, Key, User as UserIcon, Settings, Server, Globe, Cpu, Subtitles as SubtitlesIcon, Info } from 'lucide-react';
 
 const SYNC_DEBOUNCE_MS = 250;
 const DEFAULT_ROOM = 'default-room';
 const SPEAKER_TIMEOUT_MS = 3000;
-const MAX_UNPUNCTUATED_LENGTH = 160;
+const MAX_UNPUNCTUATED_LENGTH = 140;
 
 // @ts-ignore
 const aiStudio = window.aistudio;
@@ -32,8 +33,10 @@ const App: React.FC = () => {
   const [isTtsPlaying, setIsTtsPlaying] = useState(false);
   const [needsApiKey, setNeedsApiKey] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [showSubtitles, setShowSubtitles] = useState(true);
+  const [currentSubtitle, setCurrentSubtitle] = useState<{text: string, isFinal: boolean}>({text: '', isFinal: false});
+  const [isRateLimited, setIsRateLimited] = useState(false);
 
-  // Advanced Configurations
   const [sttProvider, setSttProvider] = useState<STTEngine>(STTEngine.GEMINI);
   const [translationProvider, setTranslationProvider] = useState<TranslationEngine>(TranslationEngine.GEMINI);
   const [deepgramKey, setDeepgramKey] = useState('');
@@ -85,9 +88,9 @@ const App: React.FC = () => {
 
         if (user) {
           setCurrentUserId(user.id);
-          const { data: profile } = await getUserProfile(user.id);
+          const { data: profile, error } = await getUserProfile(user.id);
           if (profile?.display_name) setDisplayName(profile.display_name);
-          setDbStatus('connected');
+          setDbStatus(error ? 'error' : 'connected');
         }
       } catch (err: any) {
         setDbStatus('error');
@@ -117,16 +120,9 @@ const App: React.FC = () => {
     };
   }, []);
 
-  const handleOpenKeyDialog = async () => {
-    if (aiStudio && typeof aiStudio.openSelectKey === 'function') {
-      await aiStudio.openSelectKey();
-      setNeedsApiKey(false);
-    }
-  };
-
-  const translateViaOllama = async (text: string, targetLang: string) => {
+  const translateViaOllama = async (text: string, target: string) => {
     try {
-      const prompt = `Translate this text into ${targetLang}. Respond ONLY with the translation.\nText: ${text}`;
+      const prompt = `Translate this text into ${target}. Respond ONLY with the translation.\nText: ${text}`;
       const response = await fetch(ollamaUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -144,8 +140,43 @@ const App: React.FC = () => {
     }
   };
 
+  const segmentIntoSentences = (text: string, isFinal: boolean) => {
+    const abbrevPattern = /\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|Co|Inc|Ltd|vs|approx|min|max|dept|univ|vol|ed|est|etc|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec|U\.S|U\.K|E\.U|B\.C|A\.D)\.$/i;
+    const sentenceRegex = /[^.!?\u3002\uff01\uff1f]+([.!?\u3002\uff01\uff1f]+|(?:\.\.\.))["'）)\]]*(\s+|$)/g;
+    const sentences: string[] = [];
+    let match;
+    let lastIndex = 0;
+
+    while ((match = sentenceRegex.exec(text)) !== null) {
+      const candidate = match[0].trim();
+      if (abbrevPattern.test(candidate) && !isFinal) continue;
+      sentences.push(candidate);
+      lastIndex = sentenceRegex.lastIndex;
+    }
+
+    const remaining = text.substring(lastIndex).trim();
+    if (isFinal && remaining.length > 0) {
+      sentences.push(remaining);
+      return { sentences, lastIndex: text.length };
+    }
+
+    if (remaining.length > MAX_UNPUNCTUATED_LENGTH) {
+      const lastComma = remaining.lastIndexOf(',');
+      if (lastComma > remaining.length * 0.6) {
+        sentences.push(remaining.substring(0, lastComma + 1).trim());
+        return { sentences, lastIndex: lastIndex + lastComma + 1 };
+      }
+      const lastSpace = remaining.lastIndexOf(' ');
+      if (lastSpace > remaining.length * 0.8) {
+        sentences.push(remaining.substring(0, lastSpace).trim());
+        return { sentences, lastIndex: lastIndex + lastSpace + 1 };
+      }
+    }
+    return { sentences, lastIndex };
+  };
+
   const processTranscriptItem = useCallback(async (item: any, playAudio: boolean = true) => {
-    if (!item || !item.text) return;
+    if (!item || !item.text || isRateLimited) return;
 
     const speakerName = item.sender || displayName;
     setActiveSpeakerName(speakerName);
@@ -166,38 +197,33 @@ const App: React.FC = () => {
     const lastOffset = processedTextOffsetRef.current.get(item.id) || 0;
     const currentText = item.text;
     const newContent = currentText.substring(lastOffset);
-    
-    const sentenceRegex = /[^.!?\u3002\uff01\uff1f]+[.!?\u3002\uff01\uff1f]+(?=\s|$)/g;
-    let match;
-    const completedSentences: string[] = [];
-    let lastFoundEnd = 0;
+    const { sentences, lastIndex } = segmentIntoSentences(newContent, item.isFinal);
 
-    while ((match = sentenceRegex.exec(newContent)) !== null) {
-      const segment = match[0].trim();
-      const isLikelyAbbrev = /\b(?:[A-Z][a-z]?|Prof|Dr|Mr|Ms|Mrs|St|U\.S)\.$/.test(segment);
-      if (!isLikelyAbbrev) {
-        completedSentences.push(segment);
-        lastFoundEnd = match.index + match[0].length;
-      }
+    if (newContent.trim()) {
+      setCurrentSubtitle({ text: newContent.trim(), isFinal: item.isFinal });
     }
 
-    const remaining = newContent.substring(lastFoundEnd).trim();
-    if (remaining.length > MAX_UNPUNCTUATED_LENGTH || item.isFinal) {
-      if (remaining.length > 0) {
-        completedSentences.push(remaining);
-        lastFoundEnd = newContent.length;
-      }
-    }
-
-    if (completedSentences.length > 0) {
-      processedTextOffsetRef.current.set(item.id, lastOffset + lastFoundEnd);
-      for (const sentence of completedSentences) {
+    if (sentences.length > 0) {
+      processedTextOffsetRef.current.set(item.id, lastOffset + lastIndex);
+      for (const sentence of sentences) {
         try {
           const translated = translationProvider === TranslationEngine.GEMINI 
             ? await gemini.translate(sentence, 'auto', targetLang)
             : await translateViaOllama(sentence, targetLang);
 
           const transId = crypto.randomUUID();
+          
+          if (currentUserId) {
+            await saveTranslation({
+              id: transId,
+              user_id: currentUserId,
+              source_lang: 'auto',
+              target_lang: targetLang,
+              original_text: sentence,
+              translated_text: translated
+            });
+          }
+
           setTranslations(prev => [...prev, { 
             id: transId, 
             transcriptId: item.id, 
@@ -225,10 +251,19 @@ const App: React.FC = () => {
               nextStartTimeRef.current += buffer.duration;
             }
           }
-        } catch (err) { console.error("Translation Pipeline Error:", err); }
+        } catch (err: any) {
+          console.error("Translation Pipeline Error:", err);
+          const errorMsg = err?.message || "";
+          if (errorMsg.includes('429') || errorMsg.includes('RESOURCE_EXHAUSTED')) {
+            setIsRateLimited(true);
+            setLastError("Gemini API Daily Quota Exceeded (20 requests limit). Translation paused.");
+            // Reset after 30 seconds to allow for potential retryInfo parsing if not hard limited
+            setTimeout(() => setIsRateLimited(false), 30000);
+          }
+        }
       }
     }
-  }, [targetLang, voiceName, displayName, translationProvider, ollamaUrl]);
+  }, [targetLang, voiceName, displayName, translationProvider, ollamaUrl, currentUserId, isRateLimited]);
 
   useEffect(() => {
     if (!isActive || role !== UserRole.LISTENER) return;
@@ -239,15 +274,26 @@ const App: React.FC = () => {
     return () => { supabase.removeChannel(transcriptChannel); };
   }, [isActive, role, processTranscriptItem]);
 
-  const syncToDatabase = useCallback(async (text: string, isFinal: boolean, speakerNameOverride?: string) => {
+  const syncToDatabase = useCallback(async (text: string, isFinal: boolean, senderOverride?: string) => {
     if (!text.trim() || !currentUserId || role !== UserRole.SPEAKER) return;
     const utteranceId = currentUtteranceIdRef.current;
+    
     const performSync = async () => {
-      try {
-        await saveTranscript({ id: utteranceId, user_id: currentUserId, room_id: DEFAULT_ROOM, speaker: speakerNameOverride || displayName, text });
+      const { error } = await saveTranscript({ 
+        id: utteranceId, 
+        user_id: currentUserId, 
+        room_name: DEFAULT_ROOM, 
+        sender: senderOverride || displayName, 
+        text 
+      });
+      
+      if (error) {
+        setLastError(`Persistence Error: ${error.message || 'Check your internet connection.'}`);
+      } else {
         if (isFinal) { currentUtteranceIdRef.current = crypto.randomUUID(); }
-      } catch (e: any) { setLastError(e.message); }
+      }
     };
+
     if (syncTimeoutRef.current) window.clearTimeout(syncTimeoutRef.current);
     if (isFinal) performSync();
     else syncTimeoutRef.current = window.setTimeout(performSync, SYNC_DEBOUNCE_MS);
@@ -266,6 +312,7 @@ const App: React.FC = () => {
       setAudioLevel(0);
       setTranscripts([]);
       setTranslations([]);
+      setCurrentSubtitle({text: '', isFinal: false});
       processedTextOffsetRef.current.clear();
     } else {
       if (role === UserRole.IDLE) return;
@@ -273,7 +320,8 @@ const App: React.FC = () => {
         await requestWakeLock();
         if (role === UserRole.LISTENER) {
           setSessionStatus('connecting');
-          const { data } = await fetchTranscripts(DEFAULT_ROOM);
+          const { data, error } = await fetchTranscripts(DEFAULT_ROOM);
+          if (error) throw error;
           if (data) for (const item of data) await processTranscriptItem(item, false);
           setSessionStatus('connected');
         }
@@ -283,24 +331,17 @@ const App: React.FC = () => {
           if (audioSource === AudioSource.MIC) {
             stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, sampleRate: 16000 } });
           } else {
-            // Restore Tab/System audio capture logic
             try {
               stream = await navigator.mediaDevices.getDisplayMedia({
                 video: true,
-                audio: {
-                  echoCancellation: false,
-                  noiseSuppression: false,
-                  autoGainControl: false,
-                  sampleRate: 16000
-                }
+                audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, sampleRate: 16000 }
               });
-              
               if (stream.getAudioTracks().length === 0) {
                 stream.getTracks().forEach(t => t.stop());
-                throw new Error("No audio track found. Please ensure you check 'Share audio' when choosing a tab or window.");
+                throw new Error("No audio track found. Please share audio.");
               }
             } catch (err: any) {
-              if (err.name === 'NotAllowedError') return; // User cancelled
+              if (err.name === 'NotAllowedError') return;
               throw err;
             }
           }
@@ -313,9 +354,10 @@ const App: React.FC = () => {
             const manager = await gemini.connectLive({
               onTranscription: (text, isFinal, speaker) => {
                 const uid = currentUtteranceIdRef.current;
-                const speakerName = speaker || displayName;
-                syncToDatabase(text, isFinal, speakerName);
-                if (isFinal) processTranscriptItem({ id: uid, text, sender: speakerName, isFinal: true }, false);
+                const senderName = speaker || displayName;
+                setCurrentSubtitle({ text, isFinal });
+                syncToDatabase(text, isFinal, senderName);
+                if (isFinal) processTranscriptItem({ id: uid, text, sender: senderName, isFinal: true }, false);
               },
               onStatusChange: setSessionStatus,
               onError: (e) => setLastError(e.message)
@@ -339,13 +381,14 @@ const App: React.FC = () => {
           } else if (sttProvider === STTEngine.WEBSPEECH) {
             setSessionStatus('connected');
             const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-            if (!SpeechRecognition) throw new Error("WebSpeech API not supported in this browser.");
+            if (!SpeechRecognition) throw new Error("WebSpeech not supported.");
             const recognition = new SpeechRecognition();
             recognition.continuous = true;
             recognition.interimResults = true;
             recognition.onresult = (e: any) => {
               const text = Array.from(e.results).map((r: any) => r[0].transcript).join(' ');
               const isFinal = e.results[e.results.length - 1].isFinal;
+              setCurrentSubtitle({ text, isFinal });
               syncToDatabase(text, isFinal, displayName);
               if (isFinal) processTranscriptItem({ id: currentUtteranceIdRef.current, text, sender: displayName, isFinal: true }, false);
             };
@@ -354,7 +397,7 @@ const App: React.FC = () => {
             recognitionRef.current = recognition;
 
           } else if (sttProvider === STTEngine.DEEPGRAM) {
-            if (!deepgramKey) throw new Error("Deepgram API Key is required.");
+            if (!deepgramKey) throw new Error("Deepgram Key required.");
             setSessionStatus('connecting');
             const socket = new WebSocket('wss://api.deepgram.com/v1/listen?smart_format=true&encoding=linear16&sample_rate=16000', ['token', deepgramKey]);
             socket.onopen = () => {
@@ -368,9 +411,12 @@ const App: React.FC = () => {
             socket.onmessage = (msg) => {
               const data = JSON.parse(msg.data);
               const transcript = data.channel.alternatives[0].transcript;
-              if (transcript && data.is_final) {
-                syncToDatabase(transcript, true, displayName);
-                processTranscriptItem({ id: currentUtteranceIdRef.current, text: transcript, sender: displayName, isFinal: true }, false);
+              if (transcript) {
+                setCurrentSubtitle({ text: transcript, isFinal: data.is_final });
+                if (data.is_final) {
+                  syncToDatabase(transcript, true, displayName);
+                  processTranscriptItem({ id: currentUtteranceIdRef.current, text: transcript, sender: displayName, isFinal: true }, false);
+                }
               }
             };
             socket.onerror = () => setSessionStatus('error');
@@ -383,7 +429,15 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-[100dvh] flex flex-col bg-slate-950 text-slate-100 overflow-x-hidden relative font-inter">
-      {/* Settings Modal */}
+      {isActive && showSubtitles && (currentSubtitle.text || role === UserRole.LISTENER) && (
+        <SubtitlesOverlay 
+          text={role === UserRole.SPEAKER ? currentSubtitle.text : (translations.length > 0 ? translations[translations.length - 1].text : '')} 
+          isFinal={role === UserRole.SPEAKER ? currentSubtitle.isFinal : true}
+          speakerName={role === UserRole.SPEAKER ? displayName : activeSpeakerName || 'Speaker'}
+          type={role === UserRole.SPEAKER ? 'source' : 'target'}
+        />
+      )}
+
       {isSettingsOpen && (
         <div className="fixed inset-0 z-[200] bg-slate-950/80 backdrop-blur-xl flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-white/10 rounded-[2.5rem] w-full max-w-xl p-8 md:p-12 shadow-2xl animate-in zoom-in duration-300">
@@ -405,7 +459,7 @@ const App: React.FC = () => {
                 </div>
                 {sttProvider === STTEngine.DEEPGRAM && (
                   <input 
-                    type="password" placeholder="Deepgram API Key" value={deepgramKey} 
+                    type="password" placeholder="Deepgram Key" value={deepgramKey} 
                     onChange={(e) => setDeepgramKey(e.target.value)}
                     className="w-full mt-4 bg-slate-800 border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 outline-none transition-all"
                   />
@@ -420,11 +474,27 @@ const App: React.FC = () => {
                 </div>
                 {translationProvider === TranslationEngine.OLLAMA_GEMMA && (
                   <input 
-                    type="text" placeholder="Ollama API Endpoint (URL)" value={ollamaUrl} 
+                    type="text" placeholder="Ollama API Endpoint" value={ollamaUrl} 
                     onChange={(e) => setOllamaUrl(e.target.value)}
                     className="w-full mt-4 bg-slate-800 border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 outline-none transition-all"
                   />
                 )}
+              </section>
+
+              <section>
+                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4 block">Display Options</label>
+                <button 
+                  onClick={() => setShowSubtitles(!showSubtitles)}
+                  className={`flex items-center justify-between w-full p-4 rounded-2xl border transition-all ${showSubtitles ? 'bg-indigo-600/10 border-indigo-500/50 text-indigo-400' : 'bg-slate-800/40 border-white/5 text-slate-500'}`}
+                >
+                  <div className="flex items-center gap-3">
+                    <SubtitlesIcon className="w-5 h-5" />
+                    <span className="text-xs font-black uppercase tracking-widest">Real-time Subtitles</span>
+                  </div>
+                  <div className={`w-10 h-5 rounded-full relative transition-colors ${showSubtitles ? 'bg-indigo-600' : 'bg-slate-700'}`}>
+                    <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${showSubtitles ? 'left-6' : 'left-1'}`} />
+                  </div>
+                </button>
               </section>
             </div>
             
@@ -438,7 +508,19 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {lastError && (
+      {isRateLimited && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[100] w-[95%] max-w-2xl animate-in slide-in-from-top duration-300">
+          <div className="bg-amber-500/15 border border-amber-500/40 backdrop-blur-2xl p-5 rounded-3xl flex items-start gap-4 shadow-2xl">
+            <Info className="w-5 h-5 text-amber-500 shrink-0 mt-1" />
+            <div className="flex-1 min-w-0">
+              <h4 className="text-amber-400 font-black text-xs uppercase tracking-widest mb-1">Quota Warning</h4>
+              <p className="text-amber-100/80 text-sm">Gemini Free Tier limit reached (20 daily requests). Translation is currently paused to prevent errors. Please wait or upgrade your API plan.</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {lastError && !isRateLimited && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[100] w-[95%] max-w-2xl animate-in slide-in-from-top duration-300">
           <div className="bg-rose-500/15 border border-rose-500/40 backdrop-blur-2xl p-5 rounded-3xl flex items-start gap-4 shadow-2xl">
             <AlertCircle className="w-5 h-5 text-rose-500 shrink-0 mt-1" />
@@ -471,12 +553,7 @@ const App: React.FC = () => {
               <Settings className="w-5 h-5" />
               <span className="text-[10px] font-black uppercase tracking-widest hidden sm:inline">Settings</span>
             </button>
-            <StatusBadge 
-              status={sessionStatus} 
-              icon={role === UserRole.SPEAKER ? Wifi : CloudLightning} 
-              label={sttProvider + " " + sessionStatus.toUpperCase()} 
-              active={sessionStatus === 'connected'} 
-            />
+            <StatusBadge status={sessionStatus} icon={role === UserRole.SPEAKER ? Wifi : CloudLightning} label={sttProvider + " " + sessionStatus.toUpperCase()} active={sessionStatus === 'connected'} />
             <StatusBadge status={dbStatus} icon={Database} label="DATABASE" active={dbStatus === 'connected'} error={dbStatus === 'error'} />
           </div>
         </div>
