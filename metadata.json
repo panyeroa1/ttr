@@ -1,0 +1,8 @@
+{
+  "name": "TTR - Transcription Translation Realtime",
+  "description": "A high-performance real-time meeting tool that uses Gemini Live for instant transcription, translation, and text-to-speech output.",
+  "requestFramePermissions": [
+    "microphone",
+    "display-capture"
+  ]
+}
