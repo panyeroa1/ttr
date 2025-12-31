@@ -64,12 +64,12 @@ const VAD_HANGOVER_MS = 1000; // Keep sending audio for 1s after last detected s
 const VAD_PREROLL_MS = 400;   // Buffer 400ms of audio to catch soft starts
 
 export class LiveSessionManager {
-  private ai: GoogleGenAI;
+  private ai: GoogleGenAI | null = null;
   private callbacks: LiveSessionCallbacks;
   private currentSession: any = null;
   private status: SessionStatus = 'disconnected';
   private retryCount = 0;
-  private maxRetries = 5;
+  private maxRetries = 3;
   private isExplicitlyClosed = false;
   private currentTranscription = '';
 
@@ -79,8 +79,7 @@ export class LiveSessionManager {
   private preRollBuffer: Uint8Array[] = [];
   private readonly sampleRate = 16000;
 
-  constructor(apiKey: string, callbacks: LiveSessionCallbacks) {
-    this.ai = new GoogleGenAI({ apiKey });
+  constructor(callbacks: LiveSessionCallbacks) {
     this.callbacks = callbacks;
   }
 
@@ -98,6 +97,16 @@ export class LiveSessionManager {
   private async internalConnect() {
     if (this.isExplicitlyClosed) return;
 
+    const apiKey = process.env.API_KEY;
+    if (!apiKey) {
+      this.setStatus('error');
+      this.callbacks.onError?.(new Error('API Key is missing. Please ensure you are authenticated.'));
+      return;
+    }
+
+    // Always create a fresh GoogleGenAI instance right before connecting
+    // to ensure we have the most up-to-date API key.
+    this.ai = new GoogleGenAI({ apiKey });
     this.setStatus(this.retryCount > 0 ? 'reconnecting' : 'connecting');
 
     try {
@@ -129,7 +138,14 @@ export class LiveSessionManager {
           },
           onerror: (e) => {
             console.error('Gemini Live error:', e);
-            this.callbacks.onError?.(e);
+            
+            // If the error message mentions "entity was not found", it often means 
+            // the API key or project isn't valid for this specific model/feature.
+            if (e.message?.includes('Requested entity was not found')) {
+               this.callbacks.onError?.(new Error('API Key Error: Requested project or model not found. Check billing.'));
+            } else {
+               this.callbacks.onError?.(e);
+            }
             this.handleDisconnect();
           },
           onclose: (e) => {
@@ -153,7 +169,7 @@ export class LiveSessionManager {
           5. NO DELAY: Stream transcription chunks as soon as they are parsed.`,
         }
       });
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to establish connection:', err);
       this.handleDisconnect();
     }
@@ -167,12 +183,12 @@ export class LiveSessionManager {
 
     if (this.retryCount < this.maxRetries) {
       this.retryCount++;
-      const delay = Math.min(1000 * Math.pow(2, this.retryCount), 10000);
+      const delay = Math.min(1000 * Math.pow(2, this.retryCount), 5000);
       this.setStatus('reconnecting');
       setTimeout(() => this.internalConnect(), delay);
     } else {
       this.setStatus('error');
-      this.callbacks.onError?.(new Error('Persistent connection failure'));
+      this.callbacks.onError?.(new Error('Network error: Persistent connection failure. Please check your internet connection and API key permissions.'));
     }
   }
 
@@ -226,17 +242,23 @@ export class LiveSessionManager {
 
   private sendToModel(data: Uint8Array) {
     if (this.status === 'connected' && this.currentSession) {
-      this.currentSession.sendRealtimeInput({
-        media: { data: encode(data), mimeType: 'audio/pcm;rate=16000' }
-      });
+      try {
+        this.currentSession.sendRealtimeInput({
+          media: { data: encode(data), mimeType: 'audio/pcm;rate=16000' }
+        });
+      } catch (err) {
+        console.warn("Failed to send audio chunk:", err);
+      }
     }
   }
 
   close() {
     this.isExplicitlyClosed = true;
     if (this.currentSession) {
+      try { this.currentSession.close(); } catch(e) {}
       this.currentSession = null;
     }
+    this.ai = null;
     this.setStatus('disconnected');
     this.preRollBuffer = [];
     this.isSpeaking = false;
@@ -245,9 +267,7 @@ export class LiveSessionManager {
 
 export class GeminiService {
   async connectLive(callbacks: LiveSessionCallbacks) {
-    const apiKey = process.env.API_KEY;
-    if (!apiKey) throw new Error('API Key missing');
-    const manager = new LiveSessionManager(apiKey, callbacks);
+    const manager = new LiveSessionManager(callbacks);
     await manager.connect();
     return manager;
   }
