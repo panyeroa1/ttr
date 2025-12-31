@@ -1,4 +1,3 @@
-
 import React, { useEffect, useRef } from 'react';
 import { TranscriptionItem, TranslationItem } from '../types';
 import { MessageSquare, Languages as LangIcon } from 'lucide-react';
@@ -25,56 +24,68 @@ const LiveCaptions: React.FC<LiveCaptionsProps> = ({ transcripts, translations, 
   }, [transcripts, translations]);
 
   return (
-    <div className="flex flex-col h-[45vh] md:h-full min-h-[300px] bg-slate-900/40 backdrop-blur-xl rounded-[2rem] border border-white/5 overflow-hidden shadow-2xl">
+    <div className="flex flex-col h-full w-full bg-slate-900/40 backdrop-blur-xl rounded-[2.5rem] border border-white/10 overflow-hidden shadow-2xl transition-all border-opacity-20">
       {/* Header */}
-      <div className="px-6 py-4 border-b border-white/5 flex justify-between items-center shrink-0">
-        <div className="flex items-center gap-2.5">
-          <div className={`p-1.5 rounded-lg ${type === 'source' ? 'bg-indigo-500/10 text-indigo-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
-            {type === 'source' ? <MessageSquare className="w-3.5 h-3.5" /> : <LangIcon className="w-3.5 h-3.5" />}
+      <div className="px-10 py-6 border-b border-white/5 flex justify-between items-center shrink-0 bg-slate-900/20">
+        <div className="flex items-center gap-4">
+          <div className={`p-3 rounded-2xl shadow-lg ${type === 'source' ? 'bg-indigo-500 text-white shadow-indigo-500/20' : 'bg-emerald-500 text-white shadow-emerald-500/20'}`}>
+            {type === 'source' ? <MessageSquare className="w-5 h-5" /> : <LangIcon className="w-5 h-5" />}
           </div>
-          <h3 className="font-black text-slate-300 text-[10px] uppercase tracking-widest">{title}</h3>
+          <div>
+            <h3 className="font-black text-slate-100 text-[12px] uppercase tracking-[0.25em]">{title}</h3>
+            <p className="text-[9px] text-slate-500 font-bold uppercase tracking-widest mt-0.5">Real-time Stream</p>
+          </div>
         </div>
-        <div className={`w-1.5 h-1.5 rounded-full ${!isEmpty ? 'bg-emerald-500 animate-pulse' : 'bg-slate-700'}`} />
+        <div className="flex items-center gap-3">
+          <div className={`w-2.5 h-2.5 rounded-full ${!isEmpty ? 'bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.5)] animate-pulse' : 'bg-slate-700'}`} />
+          <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">{!isEmpty ? 'Active' : 'Standby'}</span>
+        </div>
       </div>
 
       {/* Content */}
       <div 
         ref={scrollRef}
-        className={`flex-1 overflow-y-auto p-4 md:p-6 space-y-4 md:space-y-6 scrollbar-hide flex flex-col ${isEmpty ? 'justify-center items-center' : ''}`}
+        className={`flex-1 overflow-y-auto p-8 md:p-12 space-y-10 scrollbar-hide flex flex-col ${isEmpty ? 'justify-center items-center' : ''}`}
       >
         {isEmpty ? (
-          <div className="text-center opacity-40 animate-in fade-in zoom-in duration-500">
-            <div className="mb-2 p-4 bg-slate-800/50 rounded-full inline-block">
-               {type === 'source' ? <MessageSquare className="w-6 h-6" /> : <LangIcon className="w-6 h-6" />}
+          <div className="text-center opacity-30 animate-in fade-in zoom-in duration-700">
+            <div className="mb-6 p-10 bg-slate-800/30 rounded-full inline-block border border-white/5">
+               {type === 'source' ? <MessageSquare className="w-12 h-12 text-indigo-400" /> : <LangIcon className="w-12 h-12 text-emerald-400" />}
             </div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Waiting for Stream</p>
+            <p className="text-sm font-black uppercase tracking-[0.3em] text-slate-500">Awaiting Signal</p>
           </div>
         ) : (
           <>
             {type === 'source' ? (
               transcripts.map((t) => (
-                <div key={t.id} className={`transition-all duration-300 ${t.isFinal ? 'opacity-100' : 'opacity-70'}`}>
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <span className="text-[8px] font-black text-indigo-400 uppercase tracking-widest">{t.speaker}</span>
-                    <div className="h-[1px] flex-1 bg-white/5" />
+                <div key={t.id} className={`transition-all duration-500 w-full animate-in fade-in slide-in-from-bottom-2 ${t.isFinal ? 'opacity-100' : 'opacity-60'}`}>
+                  <div className="flex items-center gap-4 mb-4">
+                    <span className="text-[10px] font-black text-indigo-400 uppercase tracking-widest flex items-center gap-2">
+                       <div className="w-1 h-1 bg-indigo-500 rounded-full" />
+                       {t.speaker}
+                    </span>
+                    <div className="h-[1px] flex-1 bg-gradient-to-r from-indigo-500/20 to-transparent" />
                   </div>
-                  <div className="bg-slate-800/30 p-4 rounded-2xl border border-white/5 backdrop-blur-sm">
-                    <p className="text-slate-100 text-sm md:text-base leading-relaxed">
+                  <div className="bg-slate-800/20 p-8 rounded-[2rem] border border-white/5 backdrop-blur-sm shadow-xl hover:border-indigo-500/20 transition-colors">
+                    <p className="text-slate-100 text-lg md:text-2xl leading-relaxed font-semibold tracking-tight">
                       {t.text}
-                      {!t.isFinal && <span className="inline-block w-1.5 h-4 ml-2 bg-indigo-500/50 animate-pulse align-middle rounded-full" />}
+                      {!t.isFinal && <span className="inline-block w-2.5 h-7 ml-3 bg-indigo-500/40 animate-pulse align-middle rounded-full shadow-[0_0_15px_rgba(99,102,241,0.5)]" />}
                     </p>
                   </div>
                 </div>
               ))
             ) : (
               translations.map((tr) => (
-                <div key={tr.id} className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <span className="text-[8px] font-black text-emerald-400 uppercase tracking-widest">{tr.lang}</span>
-                    <div className="h-[1px] flex-1 bg-white/5" />
+                <div key={tr.id} className="animate-in fade-in slide-in-from-bottom-6 duration-700 w-full">
+                  <div className="flex items-center gap-4 mb-4">
+                    <span className="text-[10px] font-black text-emerald-400 uppercase tracking-widest flex items-center gap-2">
+                       <div className="w-1 h-1 bg-emerald-500 rounded-full" />
+                       {tr.lang}
+                    </span>
+                    <div className="h-[1px] flex-1 bg-gradient-to-r from-emerald-500/20 to-transparent" />
                   </div>
-                  <div className="bg-emerald-500/5 p-4 rounded-2xl border border-emerald-500/10 backdrop-blur-sm">
-                    <p className="text-emerald-50/90 text-sm md:text-base leading-relaxed font-medium">
+                  <div className="bg-emerald-500/5 p-8 rounded-[2rem] border border-emerald-500/20 backdrop-blur-sm shadow-xl hover:border-emerald-500/40 transition-colors">
+                    <p className="text-emerald-50 text-xl md:text-3xl leading-relaxed font-black tracking-tight drop-shadow-sm">
                       {tr.text}
                     </p>
                   </div>

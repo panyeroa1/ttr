@@ -56,6 +56,13 @@ export interface LiveSessionCallbacks {
   onError?: (e: any) => void;
 }
 
+/**
+ * VAD Configuration
+ */
+const VAD_THRESHOLD = 0.006;
+const VAD_HANGOVER_MS = 1000; // Keep sending audio for 1s after last detected speech
+const VAD_PREROLL_MS = 400;   // Buffer 400ms of audio to catch soft starts
+
 export class LiveSessionManager {
   private ai: GoogleGenAI;
   private callbacks: LiveSessionCallbacks;
@@ -65,6 +72,12 @@ export class LiveSessionManager {
   private maxRetries = 5;
   private isExplicitlyClosed = false;
   private currentTranscription = '';
+
+  // VAD State
+  private isSpeaking = false;
+  private lastSpeechTime = 0;
+  private preRollBuffer: Uint8Array[] = [];
+  private readonly sampleRate = 16000;
 
   constructor(apiKey: string, callbacks: LiveSessionCallbacks) {
     this.ai = new GoogleGenAI({ apiKey });
@@ -127,14 +140,17 @@ export class LiveSessionManager {
         config: {
           responseModalities: [Modality.AUDIO],
           inputAudioTranscription: {},
-          systemInstruction: `You are a high-performance real-time transcription agent.
+          systemInstruction: `You are a world-class real-time transcriptionist. 
           
-          RULES:
-          1. TRANSCRIBE exactly what is heard.
-          2. SEGMENTATION: Trigger 'turnComplete' after exactly 1.0 seconds of silence.
-          3. PUNCTUATION: Use precise semantic punctuation (periods, commas, question marks).
-          4. NO META-TALK: Never respond to the user. Only transcribe.
-          5. NO DELAY: Stream transcription immediately.`,
+          TASK:
+          Convert audio stream into highly accurate text.
+          
+          GUIDELINES:
+          1. VERBATIM: Output exactly what is spoken.
+          2. FORMATTING: Use professional punctuation and casing.
+          3. SEGMENTATION: Be sensitive to conversational pauses. Trigger 'turnComplete' on significant silence (approx 1.5s).
+          4. NO CHATTER: Do not respond to content. Only transcribe.
+          5. NO DELAY: Stream transcription chunks as soon as they are parsed.`,
         }
       });
     } catch (err) {
@@ -160,9 +176,59 @@ export class LiveSessionManager {
     }
   }
 
-  sendRealtimeInput(input: any) {
+  /**
+   * Processes raw audio data with VAD logic
+   */
+  processAudio(data: Float32Array) {
+    if (this.status !== 'connected' || !this.currentSession) return;
+
+    // Calculate RMS for basic VAD
+    let rms = 0;
+    for (let i = 0; i < data.length; i++) rms += data[i] * data[i];
+    const currentLevel = Math.sqrt(rms / data.length);
+
+    // Convert to PCM
+    const int16 = new Int16Array(data.length);
+    for (let i = 0; i < data.length; i++) int16[i] = data[i] * 32768;
+    const pcmBytes = new Uint8Array(int16.buffer);
+
+    const now = Date.now();
+
+    if (currentLevel > VAD_THRESHOLD) {
+      this.lastSpeechTime = now;
+      if (!this.isSpeaking) {
+        this.isSpeaking = true;
+        // Flush Pre-roll
+        console.debug("VAD: Speech Start Detected. Flushing Pre-roll.");
+        this.preRollBuffer.forEach(chunk => this.sendToModel(chunk));
+        this.preRollBuffer = [];
+      }
+      this.sendToModel(pcmBytes);
+    } else {
+      if (this.isSpeaking) {
+        // Hangover Period
+        if (now - this.lastSpeechTime < VAD_HANGOVER_MS) {
+          this.sendToModel(pcmBytes);
+        } else {
+          console.debug("VAD: Speech End (Hangover Finished).");
+          this.isSpeaking = false;
+        }
+      } else {
+        // Lookbehind Buffer (Pre-roll)
+        this.preRollBuffer.push(pcmBytes);
+        const maxPreRollFrames = (VAD_PREROLL_MS / 1000) * (this.sampleRate / data.length);
+        if (this.preRollBuffer.length > maxPreRollFrames) {
+          this.preRollBuffer.shift();
+        }
+      }
+    }
+  }
+
+  private sendToModel(data: Uint8Array) {
     if (this.status === 'connected' && this.currentSession) {
-      this.currentSession.sendRealtimeInput(input);
+      this.currentSession.sendRealtimeInput({
+        media: { data: encode(data), mimeType: 'audio/pcm;rate=16000' }
+      });
     }
   }
 
@@ -172,6 +238,8 @@ export class LiveSessionManager {
       this.currentSession = null;
     }
     this.setStatus('disconnected');
+    this.preRollBuffer = [];
+    this.isSpeaking = false;
   }
 }
 
@@ -194,15 +262,17 @@ export class GeminiService {
     return response.text?.trim() || "";
   }
 
-  async generateSpeech(text: string, targetVoice: string = 'Kore') {
+  async generateSpeech(text: string, voiceName: string = 'Aoede') {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const prebuiltVoice = voiceName === 'Orus' ? 'Puck' : 'Kore';
+
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-preview-tts",
       contents: [{ parts: [{ text: text }] }],
       config: {
         responseModalities: [Modality.AUDIO],
         speechConfig: {
-          voiceConfig: { prebuiltVoiceConfig: { voiceName: targetVoice } },
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: prebuiltVoice } },
         },
       },
     });

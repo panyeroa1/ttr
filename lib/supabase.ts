@@ -39,6 +39,20 @@ export const saveTranscript = async (data: { id: string, user_id: string, room_i
   return { data: result ? result[0] : null };
 };
 
+export const fetchTranscripts = async (room_id: string) => {
+  const { data, error } = await supabase
+    .from('transcriptions')
+    .select('*')
+    .eq('room_name', room_id)
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    console.error('Supabase Fetch Error (Transcriptions):', error.message);
+    return { error, data: [] };
+  }
+  return { data };
+};
+
 export const saveTranslation = async (data: { id: string, user_id: string, source_lang: string, target_lang: string, original_text: string, translated_text: string }) => {
   const { data: result, error } = await supabase
     .from('translations')
